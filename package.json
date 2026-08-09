@@ -1,7 +1,7 @@
 {
   "name": "justjpeg",
   "productName": "Just JPEG",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Convert Apple HEIC photos and camera RAW files to JPEG or PNG, thousands at a time.",
   "author": {
     "name": "PonderDev",

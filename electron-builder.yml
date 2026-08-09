@@ -24,7 +24,10 @@ publish: null
 
 mac:
   category: public.app-category.photography
-  icon: build/icon.png
+  # Built by scripts/make-icns.sh rather than converted from the PNG:
+  # electron-builder's own conversion flattened the alpha on the 16x16 and
+  # 32x32 entries, which made the icon a solid square in Finder list view.
+  icon: build/icon.icns
   target:
     - target: dmg
       arch: [universal]

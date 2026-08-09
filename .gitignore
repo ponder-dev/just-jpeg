@@ -10,3 +10,6 @@ test/fixtures/s1.heic
 test/fixtures/s2.heic
 test/fixtures/sample.dng
 test/fixtures/sample.tiff
+
+# Intermediate iconset; build/icon.icns is the artefact that ships.
+build/icon.iconset/
