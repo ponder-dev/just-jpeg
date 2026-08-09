@@ -112,7 +112,7 @@ function isPng(b) { return b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[
         format: c.format,
         quality: c.quality,
         maxDim: c.maxDim || 0,
-        keepMetadata: true,
+        keepMetadata: c.keepMetadata !== false,
         maxQuality: !!c.maxQuality,
       }, [bytes]);
 
@@ -136,6 +136,12 @@ function isPng(b) { return b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[
       if (c.expect.fullChroma) {
         const sampling = readChromaSampling(out);
         if (sampling !== '1x1') problems.push(`chroma is ${sampling}, expected 1x1 (4:4:4)`);
+      }
+
+      // The claim on the website is that this removes it, so prove it does.
+      if (c.expect.noExif) {
+        const tiff = extractExif(out);
+        if (tiff) problems.push(`EXIF survived (${tiff.length} bytes) when it should have been stripped`);
       }
 
       if (c.expect.exif) {

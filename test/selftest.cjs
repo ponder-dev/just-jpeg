@@ -27,6 +27,9 @@ const CASES = [
   { file: 'p3.heic', format: 'jpeg', quality: 92, expect: { icc: true } },
   { file: 's1.heic', format: 'jpeg', quality: 92, maxQuality: true, expect: { fullChroma: true } },
   { file: 'sample.dng', format: 'jpeg', quality: 92, maxQuality: true, expect: { fullChroma: true, exif: true } },
+  // Unticking "keep photo details" has to genuinely strip it, GPS included.
+  { file: 'withexif.heic', format: 'jpeg', quality: 85, keepMetadata: false, expect: { noExif: true } },
+  { file: 'withexif.jpg', format: 'jpeg', quality: 85, keepMetadata: false, expect: { noExif: true } },
 ];
 
 ipcMain.handle('fixture', (_e, name) => {

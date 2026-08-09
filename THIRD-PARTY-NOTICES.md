@@ -5,7 +5,7 @@ under what terms, and where to get the original source. Full licence texts are
 in the `licenses/` folder and are also shown inside the app under
 **Help > Licences and credits**.
 
-Just JPEG itself is MIT licensed. See `LICENSE`.
+Just JPEG itself is GPL-3.0-or-later. See `LICENSE`.
 
 ---
 
@@ -16,9 +16,11 @@ Reads HEIC and HEIF files. This is the part that opens photos from an iPhone.
 - Bundled through [libheif-js](https://github.com/catdad-experiments/libheif-js),
   which compiles [libheif](https://github.com/strukturag/libheif) to WebAssembly.
 - HEVC decoding inside libheif is done by
-  [libde265](https://github.com/strukturag/libde265).
-- **Licence: GNU LGPL v3**, with MIT covering libheif's sample apps and wrappers.
-- Full text: `licenses/libheif.txt`
+  [libde265](https://github.com/strukturag/libde265), which is compiled into
+  the same WebAssembly build and is a separate project with its own copyright.
+- **Licence: GNU LGPL v3** for both, with MIT covering the sample apps and
+  wrappers of each.
+- Full texts: `licenses/libheif.txt` and `licenses/libde265.txt`
 
 ## LibRaw
 
@@ -75,6 +77,9 @@ The application shell, and the JPEG and PNG encoders.
 libheif, libde265 and LibRaw are LGPL. Distributing them inside an application
 carries obligations, and Just JPEG meets them like this:
 
+0. **Compatibility.** Just JPEG is GPL-3.0-or-later, which LGPL is designed to
+   combine with. LibRaw is LGPL 2.1 with no "or later" clause, but its section
+   3 permits converting to a newer GPL, which is what makes this legitimate.
 1. **Notice.** This file, plus the in-app credits screen, names each library
    and its licence.
 2. **Licence texts.** Shipped in full, both in `licenses/` and inside the app.

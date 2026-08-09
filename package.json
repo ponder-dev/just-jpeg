@@ -1,7 +1,7 @@
 {
   "name": "justjpeg",
   "productName": "Just JPEG",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Convert Apple HEIC photos and camera RAW files to JPEG or PNG, thousands at a time.",
   "author": {
     "name": "PonderDev",
@@ -15,7 +15,7 @@
   "bugs": {
     "url": "https://github.com/ponder-dev/just-jpeg/issues"
   },
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "main": "app/main.cjs",
   "private": true,
   "scripts": {

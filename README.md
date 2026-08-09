@@ -6,6 +6,17 @@ anywhere.
 
 **[Download it from ponderdev.com](https://ponderdev.com/justjpeg)**
 
+**GPL-3.0 licensed.** Read it, change it, fork it, run it, build on it. You do
+not need permission and there is nobody to ask. The one condition is that if
+you pass it on, modified or not, it goes with its source under the same
+licence, so whoever gets it has the freedoms you did. The LGPL libraries this
+builds on keep their own terms as well. See
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+There is no update checker, no telemetry and no network code, so the copy you
+build is the copy you keep. That is deliberate: these are meant to be small
+tools that do one job and then stop changing.
+
 ---
 
 ## What it handles
@@ -170,7 +181,16 @@ If that ever changes, set `identity` and `notarize` in `electron-builder.yml`.
 
 ## Licence
 
-Just JPEG is MIT. See [LICENSE](LICENSE).
+Just JPEG is GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+GPL rather than something permissive on purpose. Anyone can use this, change
+it and even charge for it, but they cannot close it: whatever they hand on has
+to carry its source under the same terms. That keeps it useful to people
+rather than useful to repackage.
+
+LibRaw is LGPL 2.1 without an "or later" clause, which usually blocks GPL-3.
+Its section 3 allows converting to a newer GPL, which is what makes this
+combination work.
 
 It stands on libheif, libde265 and LibRaw, which are LGPL, plus mozjpeg, UTIF,
 pako and Electron. Every one of them is credited with its full licence text in
