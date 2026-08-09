@@ -1,0 +1,12 @@
+node_modules/
+app/
+dist/
+test/output/
+.DS_Store
+
+# Real photographs and camera RAW from public sample sets. Used for testing,
+# not ours to republish. Run scripts/fetch-fixtures.mjs to get them.
+test/fixtures/s1.heic
+test/fixtures/s2.heic
+test/fixtures/sample.dng
+test/fixtures/sample.tiff

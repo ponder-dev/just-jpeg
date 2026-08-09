@@ -1,0 +1,72 @@
+appId: com.ponderdev.justjpeg
+productName: Just JPEG
+copyright: Copyright © PonderDev
+
+directories:
+  output: dist
+  buildResources: build
+
+# Only the bundled output ships. esbuild has already inlined everything from
+# node_modules, so none of it needs to be packaged.
+files:
+  - app/**/*
+  - package.json
+
+# asar is deliberately off. The RAW decoder starts its own worker and loads a
+# sidecar .wasm through a file:// URL, which is exactly the case asar archives
+# handle badly. The whole app directory is only a few MB, so there is nothing
+# to gain by packing it.
+asar: false
+
+# No update feed. This app is meant to be downloaded once and left alone, so
+# it must never phone home looking for a new version.
+publish: null
+
+mac:
+  category: public.app-category.photography
+  icon: build/icon.png
+  target:
+    - target: dmg
+      arch: [universal]
+  # Unsigned build: users get past Gatekeeper with right-click then Open.
+  # Set to true and add credentials if a Developer ID is ever purchased.
+  identity: null
+  notarize: false
+  darkModeSupport: true
+  extendInfo:
+    NSHumanReadableCopyright: Copyright © PonderDev
+    LSApplicationCategoryType: public.app-category.photography
+
+dmg:
+  # Names stay free of the version number so the download links on
+  # ponderdev.com keep working across releases.
+  title: Just JPEG
+  artifactName: JustJPEG-mac.${ext}
+  contents:
+    - x: 150
+      y: 190
+      type: file
+    - x: 420
+      y: 190
+      type: link
+      path: /Applications
+
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  artifactName: JustJPEG-windows-setup.${ext}
+  shortcutName: Just JPEG
+
+portable:
+  artifactName: JustJPEG-windows-portable.${ext}

@@ -1,0 +1,85 @@
+name: Build and release
+
+# Push a tag to cut a release:
+#   npm version patch && git push --follow-tags
+#
+# Or run it by hand from the Actions tab to get installers without publishing.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: mac
+            build: npm run dist:mac
+          - os: windows-latest
+            name: windows
+            build: npm run dist:win
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Fetch the test images we do not redistribute
+        run: node scripts/fetch-fixtures.mjs
+
+      - name: Check where files are allowed to land
+        run: node test/paths.test.mjs
+
+      - name: Convert every fixture and check the output
+        run: npm run bundle && npx electron test/selftest.cjs
+
+      - name: Build installers
+        run: ${{ matrix.build }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: justjpeg-${{ matrix.name }}
+          path: |
+            dist/*.dmg
+            dist/*.exe
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish the installers
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          draft: true
+          generate_release_notes: true
+          body: |
+            Download the installer for your computer below.
+
+            **Mac** Just JPEG-*-mac.dmg
+            **Windows** Just JPEG-*-windows-setup.exe, or the portable build if
+            you would rather not install anything.
+
+            These builds are not code signed, so the first launch needs one
+            extra step. On a Mac, right click the app and choose Open. On
+            Windows, click "More info" then "Run anyway".

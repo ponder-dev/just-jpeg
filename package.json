@@ -1,0 +1,39 @@
+{
+  "name": "justjpeg",
+  "productName": "Just JPEG",
+  "version": "1.0.0",
+  "description": "Convert Apple HEIC photos and camera RAW files to JPEG or PNG, thousands at a time.",
+  "author": {
+    "name": "PonderDev",
+    "url": "https://ponderdev.com"
+  },
+  "homepage": "https://ponderdev.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ponder-dev/just-jpeg.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ponder-dev/just-jpeg/issues"
+  },
+  "license": "MIT",
+  "main": "app/main.cjs",
+  "private": true,
+  "scripts": {
+    "bundle": "node scripts/bundle.mjs",
+    "start": "npm run bundle && electron .",
+    "icons": "electron scripts/icons.cjs",
+    "dist:mac": "npm run bundle && electron-builder --mac",
+    "dist:win": "npm run bundle && electron-builder --win",
+    "dist": "npm run bundle && electron-builder --mac --win",
+    "test": "node test/paths.test.mjs && npm run bundle && electron test/selftest.cjs"
+  },
+  "devDependencies": {
+    "@jsquash/jpeg": "^1.6.0",
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.25.0",
+    "libheif-js": "^1.19.8",
+    "libraw-wasm": "^1.6.0",
+    "utif": "^3.1.0"
+  }
+}
