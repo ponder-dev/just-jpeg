@@ -62,6 +62,34 @@ for roughly 45 percent more file size and about five times the encoding time.
 Leave it off for holiday snaps. Turn it on when the JPEG is replacing the
 original.
 
+## The command line
+
+```sh
+npm install -g github:ponder-dev/just-jpeg
+justjpeg photos/ --size 2000
+cat IMG_0123.heic | justjpeg > IMG_0123.jpg
+```
+
+Reads HEIC, JPEG, PNG, TIFF and WEBP; writes JPEG (default) or PNG. Folders
+recurse, metadata rides across with orientation baked upright, `--strip`
+removes it, and an existing output is renamed rather than replaced. Runs
+anywhere node does, Linux included.
+
+**The one difference from the app, on purpose: no camera RAW.** The RAW
+decoder is a web-only build that needs browser workers to run, and it does not
+survive plain node. Point RAW files at the app, which converts them fully. The
+command line says this in `--help`, says it again if you hand it a `.dng`, and
+leaves the file alone rather than failing strangely. GIF and BMP input are
+app-only for the same reason: the app decodes them with the browser's own
+decoder, and shipping a third wasm codec each for formats nobody shoots photos
+in was not worth the weight.
+
+The decoders, the EXIF handling and the output rules are shared with the app,
+not reimplemented: `src/sniff.js`, `src/exif.js` and `src/paths.js` are the
+same files the app bundles. What the command line has of its own is
+`src/pixels.js`, the orientation transform the app does on a canvas, tested
+against an independent implementation of all eight EXIF orientations.
+
 ## Your originals are safe
 
 Just JPEG only ever writes new files. It has no delete and no move. It will
@@ -112,9 +140,11 @@ Needs Node 22. There is an `.nvmrc`.
 ```sh
 npm install
 npm start          # run it
-npm test           # path safety rules, then convert every fixture and check
+npm test           # path rules, pixels, the CLI, then every fixture through the app
+npm run test:linux # the command line on real linux, in docker
 npm run dist:mac   # universal .dmg
 npm run dist:win   # .exe installer and portable build
+npm run dist:linux # AppImage and tar.gz
 ```
 
 `npm run bundle` compiles `src/` into `app/`, which is the only thing that gets

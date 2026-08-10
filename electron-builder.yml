@@ -54,6 +54,17 @@ dmg:
       type: link
       path: /Applications
 
+linux:
+  icon: build/icon.png
+  category: Graphics
+  synopsis: Convert HEIC and RAW photos to JPEG or PNG, thousands at a time
+  artifactName: JustJPEG-linux-x86_64.${ext}
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: tar.gz
+      arch: [x64]
+
 win:
   icon: build/icon.png
   target:

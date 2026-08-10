@@ -1,7 +1,7 @@
 {
   "name": "justjpeg",
   "productName": "Just JPEG",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Convert Apple HEIC photos and camera RAW files to JPEG or PNG, thousands at a time.",
   "author": {
     "name": "PonderDev",
@@ -18,6 +18,16 @@
   "license": "GPL-3.0-or-later",
   "main": "app/main.cjs",
   "private": true,
+  "type": "module",
+  "bin": {
+    "justjpeg": "src/cli.mjs"
+  },
+  "files": [
+    "src/**/*",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+    "licenses/**/*"
+  ],
   "scripts": {
     "bundle": "node scripts/bundle.mjs",
     "start": "npm run bundle && electron .",
@@ -25,15 +35,22 @@
     "dist:mac": "npm run bundle && electron-builder --mac",
     "dist:win": "npm run bundle && electron-builder --win",
     "dist": "npm run bundle && electron-builder --mac --win",
-    "test": "node test/paths.test.mjs && npm run bundle && electron test/selftest.cjs"
+    "test": "node test/paths.test.mjs && node test/pixels.test.mjs && node test/cli.test.mjs && npm run bundle && electron test/selftest.cjs",
+    "test:linux": "./scripts/test-linux.sh",
+    "dist:linux": "npm run bundle && electron-builder --linux"
   },
   "devDependencies": {
-    "@jsquash/jpeg": "^1.6.0",
     "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.25.0",
+    "libraw-wasm": "^1.6.0"
+  },
+  "dependencies": {
+    "@jsquash/jpeg": "^1.6.0",
+    "@jsquash/png": "^3.1.1",
+    "@jsquash/resize": "^2.1.1",
+    "@jsquash/webp": "^1.5.0",
     "libheif-js": "^1.19.8",
-    "libraw-wasm": "^1.6.0",
     "utif": "^3.1.0"
   }
 }

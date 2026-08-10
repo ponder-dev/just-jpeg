@@ -62,6 +62,17 @@ zlib in JavaScript, used by UTIF to inflate compressed TIFF data.
 - [pako](https://github.com/nodeca/pako).
 - **Licence: MIT and Zlib**. Full text: `licenses/pako.txt`
 
+## jSquash codecs (command line)
+
+The `justjpeg` command cannot use the browser's encoder, so it carries wasm
+codecs from the [jSquash](https://github.com/jamsinclair/jSquash) project:
+`@jsquash/jpeg` (also used by the app for its highest-quality mode),
+`@jsquash/png`, `@jsquash/webp` and `@jsquash/resize`. These wrap the Squoosh
+codecs: mozjpeg, and rust PNG/resize crates.
+
+- **Licence: MIT / Apache-2.0** for the wrappers; mozjpeg keeps its own
+  BSD-style terms, in `licenses/mozjpeg.txt`.
+
 ## Electron and Chromium
 
 The application shell, and the JPEG and PNG encoders.
