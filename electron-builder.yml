@@ -6,11 +6,21 @@ directories:
   output: dist
   buildResources: build
 
-# Only the bundled output ships. esbuild has already inlined everything from
-# node_modules, so none of it needs to be packaged.
+# The window runs the bundled output in app/, which esbuild has made
+# self-contained. src/ ships too, because it is the command line, and the app
+# has to carry a working one: Just Tool Belt runs it inside the app
+# (CONTRACT.md section 7a). Until 1.2.0 it was left out, so the downloaded app
+# had no command line at all. The command line's own dependencies are the
+# production packages electron-builder already packs.
 files:
   - app/**/*
+  - src/**/*
   - package.json
+  # The GPL wants its terms travelling with the binary, not only in the repo.
+  # Missing until 1.2.0 (tool-check 8).
+  - LICENSE
+  - THIRD-PARTY-NOTICES.md
+  - licenses/**/*
 
 # asar is deliberately off. The RAW decoder starts its own worker and loads a
 # sidecar .wasm through a file:// URL, which is exactly the case asar archives
@@ -31,6 +41,11 @@ mac:
   target:
     - target: dmg
       arch: [universal]
+    # Just Tool Belt installs from the zip: a disk image cannot be mounted
+    # reliably from a background process.
+    - target: zip
+      arch: [universal]
+  artifactName: JustJPEG-mac.${ext}
   # Unsigned build: users get past Gatekeeper with right-click then Open.
   # Set to true and add credentials if a Developer ID is ever purchased.
   identity: null
@@ -72,6 +87,11 @@ win:
       arch: [x64]
     - target: portable
       arch: [x64]
+    # Just Tool Belt installs from the zip: the portable exe unpacks itself to
+    # a temporary folder on every run, so it cannot be installed.
+    - target: zip
+      arch: [x64]
+  artifactName: JustJPEG-windows.${ext}
 
 nsis:
   oneClick: false

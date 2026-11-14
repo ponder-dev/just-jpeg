@@ -196,7 +196,7 @@ async function convert({ bytes, format, quality, maxDim, keepMetadata, maxQualit
   }
 
   const drawable = await toDrawable(decoded);
-  const canvas = render(drawable, srcW, srcH, orientation, maxDim);
+  const canvas = render(drawable, srcW, srcH, orientation, maxDim, format === 'png' ? null : '#ffffff');
   try { drawable.close && drawable.close(); } catch { /* fine */ }
 
   let out;

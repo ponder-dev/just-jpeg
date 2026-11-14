@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('ponder', {
 
   scan: (paths) => ipcRenderer.invoke('fs:scan', paths),
   read: (filePath) => ipcRenderer.invoke('fs:read', filePath),
+  startRun: (sourcePaths) => ipcRenderer.invoke('fs:startRun', sourcePaths),
   plan: (options) => ipcRenderer.invoke('fs:plan', options),
   write: (options) => ipcRenderer.invoke('fs:write', options),
 

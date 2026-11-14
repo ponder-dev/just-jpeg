@@ -19,6 +19,9 @@ const FIX = path.join(root, 'test', 'fixtures');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'justjpeg-cli-'));
 process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
 
+// The result lines of a --json run. Since 1.2.0 a done line follows them.
+const results = (text) => text.trim().split('\n').map((l) => JSON.parse(l)).filter((o) => o.type === 'result');
+
 const run = (args, opts = {}) =>
   execFileSync(process.execPath, [CLI, ...args], { encoding: 'utf8', ...opts });
 
@@ -33,8 +36,7 @@ test('a HEIC becomes an upright JPEG with its metadata', () => {
   fs.copyFileSync(path.join(FIX, 'withexif.heic'), src);
   const before = fs.readFileSync(src);
 
-  const line = run([src, '--json']).trim();
-  const r = JSON.parse(line);
+  const r = results(run([src, '--json']))[0];
   assert.equal(r.ok, true);
   // The fixture is portrait via EXIF orientation: upright means taller than wide.
   assert.ok(r.height > r.width, `should be upright, got ${r.width}x${r.height}`);
@@ -48,14 +50,14 @@ test('a HEIC becomes an upright JPEG with its metadata', () => {
 test('--strip removes the metadata', () => {
   const src = path.join(dir, 'b.heic');
   fs.copyFileSync(path.join(FIX, 'withexif.heic'), src);
-  const r = JSON.parse(run([src, '--strip', '--json']).trim());
+  const r = results(run([src, '--strip', '--json']))[0];
   assert.ok(!fs.readFileSync(r.out).includes(Buffer.from('Exif')));
 });
 
 test('--size shrinks the long edge and no further', () => {
   const src = path.join(dir, 'c.heic');
   fs.copyFileSync(path.join(FIX, 'sample.heic'), src);
-  const r = JSON.parse(run([src, '--size', '500', '--json']).trim());
+  const r = results(run([src, '--size', '500', '--json']))[0];
   assert.equal(Math.max(r.width, r.height), 500);
 });
 
@@ -64,9 +66,9 @@ test('a folder converts everything inside it', () => {
   fs.mkdirSync(sub, { recursive: true });
   fs.copyFileSync(path.join(FIX, 'sample.heic'), path.join(dir, 'folder', 'one.heic'));
   fs.copyFileSync(path.join(FIX, 'sample.png'), path.join(sub, 'two.png'));
-  const lines = run([path.join(dir, 'folder'), '--json']).trim().split('\n');
+  const lines = results(run([path.join(dir, 'folder'), '--json']));
   assert.equal(lines.length, 2, 'both files, subfolder included');
-  for (const l of lines) assert.equal(JSON.parse(l).ok, true);
+  for (const l of lines) assert.equal(l.ok, true);
 });
 
 test('an existing output is renamed, never replaced', () => {
@@ -103,10 +105,39 @@ test('stdin to stdout pipes one image', () => {
   assert.ok(b.length > 1000, 'a real image, not a fragment');
 });
 
+test('stdin into a pipe arrives whole, not cut off at 64KB', () => {
+  // Through `cat`, so stdout is a pipe: exiting early used to truncate it on macOS.
+  const b = execSync(
+    `cat ${JSON.stringify(path.join(FIX, 'sample.heic'))} | ` +
+    `${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} 2>/dev/null | cat`,
+    { maxBuffer: 64 * 1024 * 1024 },
+  );
+  assert.ok(b.length > 65536, `got ${b.length} bytes`);
+  assert.equal(b[b.length - 2], 0xff); assert.equal(b[b.length - 1], 0xd9);
+});
+
+test('--overwrite never replaces another original in the batch', () => {
+  const pair = path.join(dir, 'pair');
+  fs.mkdirSync(pair);
+  fs.copyFileSync(path.join(FIX, 'withexif.heic'), path.join(pair, 'IMG_0001.HEIC'));
+  fs.copyFileSync(path.join(FIX, 'withexif.jpg'), path.join(pair, 'IMG_0001.jpg'));
+  const before = fs.readFileSync(path.join(pair, 'IMG_0001.jpg'));
+  run([pair, '--overwrite', '--quiet']);
+  assert.deepEqual(fs.readFileSync(path.join(pair, 'IMG_0001.jpg')), before);
+  assert.ok(fs.existsSync(path.join(pair, 'IMG_0001 2.jpg')));
+});
+
+test('an option missing its value, or a negative size, is refused', () => {
+  const src = path.join(FIX, 'sample.png');
+  for (const args of [[src, '-o'], [src, '--size', '-1'], [src, '-o', '--json']]) {
+    assert.throws(() => run(args, { stdio: 'pipe' }), (e) => e.status === 2, args.join(' '));
+  }
+});
+
 test('png output writes a png', () => {
   const src = path.join(dir, 'f.heic');
   fs.copyFileSync(path.join(FIX, 'sample.heic'), src);
-  const r = JSON.parse(run([src, '-f', 'png', '--json']).trim());
+  const r = results(run([src, '-f', 'png', '--json']))[0];
   const b = fs.readFileSync(r.out);
   assert.equal(b[1], 0x50, 'PNG magic');
 });

@@ -1,12 +1,12 @@
 # Just JPEG
 
 Turns iPhone HEIC photos and camera RAW files into ordinary JPEGs or PNGs,
-thousands at a time. Free, for Mac and Windows, and nothing is uploaded
+thousands at a time. Free, for Mac, Windows and Linux, and nothing is uploaded
 anywhere.
 
 **[Download it from ponderdev.com](https://ponderdev.com/justjpeg)**
 
-**GPL-3.0 licensed.** Read it, change it, fork it, run it, build on it. You do
+**GPL-3.0-or-later licensed.** Read it, change it, fork it, run it, build on it. You do
 not need permission and there is nobody to ask. The one condition is that if
 you pass it on, modified or not, it goes with its source under the same
 licence, so whoever gets it has the freedoms you did. The LGPL libraries this
@@ -65,15 +65,15 @@ original.
 ## The command line
 
 ```sh
-npm install -g github:ponder-dev/just-jpeg
+npm install -g @ponderdev/justjpeg
 justjpeg photos/ --size 2000
 cat IMG_0123.heic | justjpeg > IMG_0123.jpg
 ```
 
-Reads HEIC, JPEG, PNG, TIFF and WEBP; writes JPEG (default) or PNG. Folders
+Reads HEIC, HEIF, AVIF, JPEG, PNG, TIFF and WEBP; writes JPEG (default) or PNG. Folders
 recurse, metadata rides across with orientation baked upright, `--strip`
 removes it, and an existing output is renamed rather than replaced. Runs
-anywhere node does, Linux included.
+anywhere node 22 or newer does, Linux included. No ffmpeg needed.
 
 **The one difference from the app, on purpose: no camera RAW.** The RAW
 decoder is a web-only build that needs browser workers to run, and it does not
@@ -83,6 +83,30 @@ leaves the file alone rather than failing strangely. GIF and BMP input are
 app-only for the same reason: the app decodes them with the browser's own
 decoder, and shipping a third wasm codec each for formats nobody shoots photos
 in was not worth the weight.
+
+### For scripts and assistants
+
+- `--json` prints one JSON line per file, then a `done` line: a `result`
+  (converted), a `skip` (a RAW file, or an output that would land on the
+  original itself) or an `error`. An output name that is merely taken is not a
+  skip: it is written as `name 2.jpg`, or replaced with `--overwrite`.
+- Piped input (`cat photo.heic | justjpeg -f png > photo.png`) works with any
+  format; `--json` prints nothing then, because stdout is the image.
+  Bad options and a missing input are JSON errors too.
+- `--describe` prints every option, its type, range and default, and the exit
+  codes, as JSON, so nothing has to be guessed from `--help`.
+- `--dry-run` lists what would be written and writes nothing.
+- `--help`, `--version` and `--describe` answer at once and do nothing else.
+- The desktop app carries this command line inside it, so the tool belt can
+  run it without anything else installed.
+
+Exit status: **0** done, **1** nothing converted, **2** a bad option or no
+input (nothing was started), **3** some files converted and some failed.
+
+**Changed in 1.2.0**, for anyone with a script from before: some files failing
+is now 3 (it was 2, which is now a usage error), and `--json` ends with a
+`done` line, so read the lines one at a time. The fields in each file's line
+are the same as before.
 
 The decoders, the EXIF handling and the output rules are shared with the app,
 not reimplemented: `src/sniff.js`, `src/exif.js` and `src/paths.js` are the

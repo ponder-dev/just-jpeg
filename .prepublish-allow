@@ -1,0 +1,3 @@
+# Third-party addresses read and allowed. One per line.
+# npm deprecation notice inside package-lock.json (an npm package author, not us).
+i@izs.me

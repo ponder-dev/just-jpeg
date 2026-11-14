@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { planOutput, outputPathFor, isSameFile, uniquePath } from '../src/paths.js';
+import { planOutput, outputPathFor, isSameFile, uniquePath, pathKey } from '../src/paths.js';
 
 // Build every path through path.join so the expectations hold on Windows too,
 // where separators are backslashes.
@@ -62,6 +62,7 @@ check('JPEG to JPEG in place is skipped, not overwritten', () => {
     fsWith('/photos/a.jpg'), 'darwin',
   );
   assert.equal(plan.action, 'skip', 'must refuse to write over the source');
+  assert.equal(plan.reason, 'original', 'the skip must say why');
 });
 
 check('the same refusal holds when the case differs', () => {
@@ -115,6 +116,7 @@ check('skip leaves an existing file alone', () => {
     fsWith('/photos/a.jpg'), 'darwin',
   );
   assert.equal(plan.action, 'skip');
+  assert.equal(plan.reason, 'exists', 'the skip must say why');
 });
 
 check('replace overwrites a different file when asked', () => {
@@ -123,6 +125,27 @@ check('replace overwrites a different file when asked', () => {
     fsWith('/photos/a.jpg'), 'darwin',
   );
   assert.deepEqual(plan, { path: P('/photos', 'a.jpg'), action: 'write' });
+});
+
+check('replace never replaces another original in the same run', () => {
+  // IMG_0001.HEIC beside IMG_0001.JPG: the JPG is an original, not old output.
+  const taken = new Set([pathKey('/photos/IMG_0001.HEIC', 'darwin'), pathKey('/photos/IMG_0001.JPG', 'darwin')]);
+  const plan = planOutput(
+    { sourcePath: '/photos/IMG_0001.HEIC', outDir: null, format: 'jpeg', onExisting: 'overwrite' },
+    fsWith('/photos/IMG_0001.JPG'), 'darwin', (p) => taken.has(pathKey(p, 'darwin')),
+  );
+  assert.deepEqual(plan, { path: P('/photos', 'IMG_0001 2.jpg'), action: 'write' });
+});
+
+check('siblings with one stem never share an output, even before it is written', () => {
+  const taken = new Set([pathKey('/photos/photo.jpg', 'linux')]);
+  for (const onExisting of ['rename', 'overwrite']) {
+    const plan = planOutput(
+      { sourcePath: '/photos/photo.tiff', outDir: null, format: 'jpeg', onExisting },
+      fsWith(), 'linux', (p) => taken.has(pathKey(p, 'linux')),
+    );
+    assert.deepEqual(plan, { path: P('/photos', 'photo 2.jpg'), action: 'write' }, onExisting);
+  }
 });
 
 check('keep both counts past the names already taken', () => {

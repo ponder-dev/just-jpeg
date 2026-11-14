@@ -1,7 +1,7 @@
 {
   "name": "justjpeg",
   "productName": "Just JPEG",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Convert Apple HEIC photos and camera RAW files to JPEG or PNG, thousands at a time.",
   "author": {
     "name": "PonderDev",
@@ -35,7 +35,7 @@
     "dist:mac": "npm run bundle && electron-builder --mac",
     "dist:win": "npm run bundle && electron-builder --win",
     "dist": "npm run bundle && electron-builder --mac --win",
-    "test": "node test/paths.test.mjs && node test/pixels.test.mjs && node test/cli.test.mjs && npm run bundle && electron test/selftest.cjs",
+    "test": "node test/paths.test.mjs && node test/pixels.test.mjs && node test/cli.test.mjs && node test/contract.test.mjs && npm run bundle && electron test/selftest.cjs",
     "test:linux": "./scripts/test-linux.sh",
     "dist:linux": "npm run bundle && electron-builder --linux"
   },

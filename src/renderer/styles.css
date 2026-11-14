@@ -246,5 +246,7 @@ input[type=range] {
 .errors ul { margin: 0; padding-left: 18px; }
 .errors li { color: var(--muted); font-size: 12px; margin-bottom: 5px; }
 .errors li b { color: var(--bad); font-weight: 560; }
+.skips li b { color: var(--text); }
+.skips p { font-size: 12px; margin: 10px 0 0; }
 
 #view-done .row { margin-top: 26px; }

@@ -1,12 +1,13 @@
 // Main process: owns the filesystem, the window, and nothing else.
 // All image work happens in renderer workers.
 
-import { app, BrowserWindow, dialog, ipcMain, shell, Menu } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, Menu, screen } from 'electron';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { planOutput, isSameFile } from './paths.js';
+import { planOutput, isSameFile, pathKey } from './paths.js';
+import { sniff } from './sniff.js';
 
 // This file is always bundled to CommonJS, so __dirname is the app directory.
 const APP_DIR = __dirname;
@@ -27,10 +28,27 @@ const INPUT_EXTENSIONS = new Set([
 
 let mainWindow = null;
 
+// The folder of the last file chosen, from a dialog or a drop. Windows starts
+// an Open window in Downloads otherwise, which is usually empty.
+let lastOpenDir = null;
+
 // ------------------------------------------------------------------ window ---
 
+// A small laptop screen, or a 1366x768 one with its taskbar, has less height
+// than a window may ask for, and the bottom of the window, its main button
+// included, then sat out of reach. The window and its minimum are fitted to
+// the work area of the screen it opens on.
+function fitToScreen(opts) {
+  const area = screen.getPrimaryDisplay().workAreaSize;
+  const fit = { ...opts };
+  for (const [key, side] of [['width', 'width'], ['height', 'height'], ['minWidth', 'width'], ['minHeight', 'height']]) {
+    if (typeof fit[key] === 'number') fit[key] = Math.min(fit[key], area[side]);
+  }
+  return fit;
+}
+
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow(fitToScreen({
     width: 940,
     height: 720,
     minWidth: 720,
@@ -44,7 +62,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-  });
+  }));
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.loadFile(path.join(APP_DIR, 'renderer', 'index.html'));
@@ -147,20 +165,34 @@ ipcMain.handle('app:info', () => ({
 ipcMain.handle('dialog:pickInput', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Choose photos or folders',
-    properties: ['openFile', 'openDirectory', 'multiSelections'],
+    defaultPath: lastOpenDir || app.getPath('documents'),
+    // On Windows and Linux one Open window cannot pick files and folders at
+    // once: asked for both, it shows a folder picker, and single files can't
+    // be chosen at all. There it picks files (folders still come in by
+    // dropping); on a Mac it can do both, so it still does.
+    properties: process.platform === 'darwin'
+      ? ['openFile', 'openDirectory', 'multiSelections']
+      : ['openFile', 'multiSelections'],
   });
-  return result.canceled ? [] : result.filePaths;
+  if (result.canceled) return [];
+  lastOpenDir = path.dirname(result.filePaths[0]);
+  return result.filePaths;
 });
 
 ipcMain.handle('dialog:pickOutput', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Choose where to save',
+    defaultPath: lastOpenDir || app.getPath('documents'),
     properties: ['openDirectory', 'createDirectory'],
   });
   return result.canceled ? null : result.filePaths[0];
 });
 
-ipcMain.handle('fs:scan', (_e, inputPaths) => scanPaths(inputPaths));
+ipcMain.handle('fs:scan', (_e, inputPaths) => {
+  // Dropped paths come in only here, so this is where a drop is remembered.
+  if (inputPaths && inputPaths.length) lastOpenDir = path.dirname(path.resolve(inputPaths[0]));
+  return scanPaths(inputPaths);
+});
 
 ipcMain.handle('fs:read', async (_e, filePath) => {
   const buf = await fs.readFile(filePath);
@@ -168,8 +200,40 @@ ipcMain.handle('fs:read', async (_e, filePath) => {
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 });
 
-ipcMain.handle('fs:plan', (_e, options) =>
-  planOutput(options, (p) => fsSync.existsSync(p)));
+// Paths the current run must not replace: its originals, and outputs already
+// planned. Workers plan in parallel before anything is written, so without
+// this two photos with one stem (photo.heic, photo.tiff) were both given
+// photo.jpg, and "Replace it" could replace IMG_0001.JPG with IMG_0001.HEIC.
+// Plans are claimed here, in one process, so two can never collide.
+let taken = new Set();
+
+ipcMain.handle('fs:startRun', (_e, sourcePaths) => {
+  taken = new Set((sourcePaths || []).map((p) => pathKey(p)));
+});
+
+ipcMain.handle('fs:plan', async (_e, options) => {
+  const plan = planOutput(options, (p) => fsSync.existsSync(p), process.platform, (p) => taken.has(pathKey(p)));
+  if (plan.action === 'write') taken.add(pathKey(plan.path));
+  // A skipped file is never decoded, so a damaged one (or a .jpg that isn't an
+  // image at all) was reported as a plain skip. Its first bytes are enough to
+  // say it couldn't be read instead.
+  if (plan.action === 'skip') plan.unreadable = sniff(await readHead(options.sourcePath)) === 'unknown';
+  return plan;
+});
+
+async function readHead(filePath) {
+  let handle;
+  try {
+    handle = await fs.open(filePath, 'r');
+    const buf = Buffer.alloc(64);
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    return buf.subarray(0, bytesRead);
+  } catch {
+    return Buffer.alloc(0);
+  } finally {
+    if (handle) await handle.close();
+  }
+}
 
 ipcMain.handle('fs:write', async (_e, { targetPath, bytes, sourcePath, keepDate }) => {
   // The planner already refuses this, but the rule is important enough to

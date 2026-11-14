@@ -39,6 +39,13 @@ function formatDuration(seconds) {
   return `${h}h ${m % 60}m`;
 }
 
+// ipcRenderer.invoke wraps a handler's error as "Error invoking remote
+// method 'x': Error: <message>"; only the message is ours to show.
+function plainError(err) {
+  const text = String((err && err.message) || err || '');
+  return text.replace(/^Error invoking remote method '[^']*': (?:\w*Error: )?/, '');
+}
+
 function plural(n, word) {
   return `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 }
@@ -133,7 +140,8 @@ async function convertAll() {
   const workers = Array.from({ length: poolSize() }, createWorker);
 
   state.cancelled = false;
-  const results = { converted: 0, skipped: 0, failed: 0, errors: [], bytesOut: 0, firstOutput: null };
+  await window.ponder.startRun(state.files.map((f) => f.path));
+  const results = { converted: 0, skipped: 0, failed: 0, errors: [], skips: [], bytesOut: 0, firstOutput: null };
 
   let next = 0;
   let finished = 0;
@@ -145,6 +153,9 @@ async function convertAll() {
   $('progress-file').textContent = '';
   $('progress-eta').textContent = '';
   show('progress');
+  // Convert sits at the bottom of a scrolled settings page; bring the progress
+  // into view so it is plain that the run started.
+  views.progress.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 
   function tick(name) {
     finished++;
@@ -169,7 +180,18 @@ async function convertAll() {
     });
 
     if (plan.action === 'skip') {
+      if (plan.unreadable) throw new Error("Couldn't be read. It is damaged, or not a photo.");
       results.skipped++;
+      // A bare count left people guessing which file was skipped and why.
+      if (results.skips.length < 200) {
+        const outName = plan.path.split(/[\\/]/).pop();
+        results.skips.push({
+          name: file.name,
+          message: plan.reason === 'original'
+            ? `saving ${outName} here would replace the original`
+            : `${outName} is already there`,
+        });
+      }
       return;
     }
 
@@ -210,7 +232,7 @@ async function convertAll() {
       } catch (err) {
         results.failed++;
         if (results.errors.length < 200) {
-          results.errors.push({ name: file.name, message: (err && err.message) || String(err) });
+          results.errors.push({ name: file.name, message: plainError(err) });
         }
       }
       tick(file.name);
@@ -230,7 +252,9 @@ async function convertAll() {
 }
 
 function showDone(results, elapsed, settings) {
-  $('done-title').textContent = state.cancelled ? 'Stopped' : 'All done';
+  // "All done" over nothing converted read as success.
+  $('done-title').textContent = state.cancelled ? 'Stopped'
+    : results.converted === 0 && (results.skipped || results.failed) ? 'Nothing converted' : 'All done';
 
   const bits = [`${plural(results.converted, 'photo')} converted`];
   if (results.skipped) bits.push(`${results.skipped.toLocaleString()} skipped`);
@@ -242,21 +266,24 @@ function showDone(results, elapsed, settings) {
     ? `${formatBytes(results.bytesOut)} of ${settings.format === 'png' ? 'PNG' : 'JPEG'} saved ${state.outputDir ? 'to ' : ''}${where}, in ${formatDuration(elapsed)}.`
     : '';
 
-  const errorBox = $('done-errors');
-  errorBox.classList.toggle('hidden', results.errors.length === 0);
-  if (results.errors.length) {
-    $('error-list').innerHTML = '';
-    for (const e of results.errors.slice(0, 100)) {
-      const li = document.createElement('li');
-      const b = document.createElement('b');
-      b.textContent = e.name;
-      li.append(b, document.createTextNode(`: ${e.message}`));
-      $('error-list').appendChild(li);
-    }
-  }
+  fillList('done-errors', 'error-list', results.errors);
+  fillList('done-skips', 'skip-list', results.skips);
 
   $('btn-reveal').classList.toggle('hidden', !results.firstOutput);
   show('done');
+  views.done.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function fillList(boxId, listId, entries) {
+  $(boxId).classList.toggle('hidden', entries.length === 0);
+  $(listId).innerHTML = '';
+  for (const e of entries.slice(0, 100)) {
+    const li = document.createElement('li');
+    const b = document.createElement('b');
+    b.textContent = e.name;
+    li.append(b, document.createTextNode(`: ${e.message}`));
+    $(listId).appendChild(li);
+  }
 }
 
 // ----------------------------------------------------------------- wiring ---

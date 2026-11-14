@@ -13,3 +13,16 @@ test/fixtures/sample.tiff
 
 # Intermediate iconset; build/icon.icns is the artefact that ships.
 build/icon.iconset/
+
+# Working notes, never committed. TODO.md holds this tool's small pending fixes
+# and PLAN.md the decisions it has not made. They are for us, not documentation,
+# and this repo is public.
+TODO.md
+PLAN.md
+
+# Local notes and files that stay on this machine
+_docs/
+
+# The testing house stays on this machine, in every repo (TJ, 2026-11-13).
+# bin/prepublish refuses a push that carries it.
+.administration/

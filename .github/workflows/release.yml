@@ -4,16 +4,24 @@ name: Build and release
 #   npm version patch && git push --follow-tags
 #
 # Or run it by hand from the Actions tab to get installers without publishing.
+#
+# Publishing the drafted release then publishes the command line to npm, as
+# @ponderdev/justjpeg, through npm trusted publishing: no token is stored
+# anywhere. So each public step is its own act: the tag, then publishing the
+# draft.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: write
 
 jobs:
   build:
+    if: github.event_name != 'release'
     strategy:
       fail-fast: false
       matrix:
@@ -54,22 +62,45 @@ jobs:
       - name: Convert every fixture and check the output
         run: npm run bundle && ${{ matrix.selftest || 'npx electron test/selftest.cjs' }}
 
+      - name: The command-line contract
+        run: node test/contract.test.mjs
+
       - name: Build installers
         run: ${{ matrix.build }}
+
+      # A versioned filename breaks every download link on the website the
+      # moment a new release goes out, quietly, on one file out of seven.
+      - name: Refuse a filename carrying the version
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          bad=$(ls dist | grep -F "$version" || true)
+          if [ -n "$bad" ]; then
+            echo "::error::These artifacts carry the version in the filename: $bad"
+            exit 1
+          fi
+
+      # What the command line says about itself, for the catalogue and the
+      # site's specs page. Written once, from Linux, by the tool itself.
+      - name: The describe file
+        if: matrix.name == 'linux'
+        run: node src/cli.mjs --describe > dist/justjpeg.json
 
       - uses: actions/upload-artifact@v4
         with:
           name: justjpeg-${{ matrix.name }}
           path: |
             dist/*.dmg
+            dist/*.zip
             dist/*.exe
             dist/*.AppImage
             dist/*.tar.gz
+            dist/justjpeg.json
           if-no-files-found: error
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -103,10 +134,54 @@ jobs:
           body: |
             Download the installer for your computer below.
 
-            **Mac** Just JPEG-*-mac.dmg
-            **Windows** Just JPEG-*-windows-setup.exe, or the portable build if
+            **Mac** JustJPEG-mac.dmg, one download for both chips.
+            **Windows** JustJPEG-windows-setup.exe, or the portable build if
             you would rather not install anything.
+            **Linux** JustJPEG-linux-x86_64.AppImage, or the tar.gz.
+            **Command line** `npm install -g @ponderdev/justjpeg`
+
+            The .zip files are for Just Tool Belt, which installs from them.
 
             These builds are not code signed, so the first launch needs one
             extra step. On a Mac, right click the app and choose Open. On
             Windows, click "More info" then "Run anyway".
+
+  # npm, only when a person publishes the drafted release. Trusted
+  # publishing: GitHub proves to npm which workflow built the package, so no
+  # token exists to leak. npmjs.com has to name this repo and this file
+  # (release.yml) as the package's trusted publisher first.
+  npm:
+    name: Publish the command line to npm
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs a newer npm than Node 22 ships with.
+      - name: A current npm
+        run: npm install -g npm@latest
+
+      - name: Shape the package for npm
+        run: |
+          npm pkg set name=@ponderdev/justjpeg
+          npm pkg delete private devDependencies
+          node src/cli.mjs --version
+          npm pack --dry-run
+
+      # npm only lets trusted publishing be set up on a package that already
+      # exists, so the very first version goes out with a short-lived token
+      # kept as the NPM_FIRST_PUBLISH secret, which is then deleted. Every
+      # version after that uses trusted publishing and no token at all.
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_FIRST_PUBLISH }}
+        run: npm publish --access public --provenance
+

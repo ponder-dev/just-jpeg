@@ -9,8 +9,9 @@
  * shrinking so the long edge is at most `maxDim` (0 means leave it alone).
  *
  * `srcW`/`srcH` are the source's own dimensions, before any rotation.
+ * `background`, when given, fills the canvas first, for formats with no alpha.
  */
-export function render(source, srcW, srcH, orientation = 1, maxDim = 0) {
+export function render(source, srcW, srcH, orientation = 1, maxDim = 0, background = null) {
   // Orientations 5 to 8 turn the image a quarter turn, so the output is the
   // other way round.
   const quarterTurn = orientation >= 5 && orientation <= 8;
@@ -29,6 +30,14 @@ export function render(source, srcW, srcH, orientation = 1, maxDim = 0) {
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
+
+  // JPEG has no transparency. Left alone, a transparent canvas encodes as
+  // black, so a logo on a clear background came out on black. Paint the
+  // background first; the CLI flattens onto the same white.
+  if (background) {
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, outW, outH);
+  }
 
   // Scale first, then move into the rotated frame using unscaled distances:
   // the transform applies the scale to them for us.
