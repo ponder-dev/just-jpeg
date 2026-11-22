@@ -78,16 +78,29 @@ test('some converted and some failed is exit 3; all failed is exit 1', () => {
   assert.equal(run([allBad, '--json']).status, 1);
 });
 
-test('RAW and existing outputs are skips; --dry-run writes nothing', () => {
+test('an existing output is a skip; --dry-run writes nothing', () => {
   const d = path.join(dir, 'skips');
   fs.mkdirSync(d);
   fs.copyFileSync(path.join(FIX, 'sample.png'), path.join(d, 'one.png'));
-  fs.writeFileSync(path.join(d, 'shot.dng'), 'raw');
+  fs.copyFileSync(path.join(FIX, 'plain.jpg'), path.join(d, 'one.jpg'));
   const before = fs.readdirSync(d).sort();
-  const dry = run([d, '--dry-run', '--json']);
+  const dry = run([d, '--beside', '--dry-run', '--json']);
   assert.equal(dry.status, 0, dry.stderr);
   assert.deepEqual(fs.readdirSync(d).sort(), before, 'dry run wrote nothing');
-  assert.equal(dry.lines.find((l) => l.type === 'result').dryRun, true);
-  const raw = dry.lines.find((l) => l.type === 'skip');
-  assert.equal(raw.reason, 'raw');
+  assert.ok(dry.lines.some((l) => l.type === 'result' && l.dryRun === true));
+  const skip = dry.lines.find((l) => l.type === 'skip');
+  assert.ok(skip && ['earlier-output', 'output-exists'].includes(skip.reason), JSON.stringify(skip));
+  assert.ok(!dry.lines.some((l) => l.reason === 'raw'), 'camera RAW is no longer a skip');
+});
+
+test('--describe lists camera RAW among what it accepts, and no raw skip', () => {
+  const d = JSON.parse(run(['--describe']).stdout);
+  for (const e of ['.dng', '.cr2', '.cr3', '.nef', '.arw', '.raf', '.orf', '.rw2']) assert.ok(d.accepts.extensions.includes(e), e);
+  assert.ok(!('raw' in d.skips));
+});
+
+test('--describe says which kit it is built with, the one kit.lock names', () => {
+  const lock = JSON.parse(fs.readFileSync(path.join(here, '..', 'kit.lock'), 'utf8'));
+  assert.equal(JSON.parse(run(['--describe']).stdout).kit, lock.kit);
+  assert.ok(JSON.parse(run(['--describe']).stdout).options.some((o) => o.flags.includes('--beside')));
 });

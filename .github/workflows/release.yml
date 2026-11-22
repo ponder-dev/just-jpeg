@@ -29,6 +29,9 @@ jobs:
           - os: macos-latest
             name: mac
             build: npm run dist:mac
+            # dist:mac already runs `npm run icon`; mac is the only platform with
+            # iconutil, so the icns is built here or not at all.
+            icon: npm run icon
           - os: ubuntu-latest
             name: linux
             build: npm run dist:linux
@@ -36,9 +39,14 @@ jobs:
             # kills Electron at startup. xvfb provides the display and the
             # sandbox is off for this test process only, not for the build.
             selftest: xvfb-run --auto-servernum npx electron --no-sandbox test/selftest.cjs
+            # Same two reasons: no display, no setuid sandbox. Linux packs
+            # build/icon.png, so it needs the raster and not the icns.
+            icon: npm run icon:svg && xvfb-run --auto-servernum npx electron --no-sandbox scripts/icons.cjs
           - os: windows-latest
             name: windows
             build: npm run dist:win
+            # Windows packs build/icon.png, so it needs the raster and not the icns.
+            icon: npm run icon:svg && npm run icon:raster
 
     runs-on: ${{ matrix.os }}
 
@@ -64,6 +72,20 @@ jobs:
 
       - name: The command-line contract
         run: node test/contract.test.mjs
+
+      # The command line end to end (reruns, --overwrite, TIFF, stdin), the pixel
+      # turns, the credits page and the skill link: none of these ran before the
+      # release, so what they guard shipped unchecked.
+      - name: The command line, pixels, credits and skill link
+        run: node test/show.test.mjs && node test/pixels.test.mjs && node test/tiff.test.mjs && node test/licences.test.mjs && node test/cli.test.mjs && node test/skill.test.cjs
+
+      # The icon is generated from build/icon.svg on every platform, because the
+      # svg is now the only icon artifact in git. Nothing downstream is hand
+      # edited and nothing is committed that a build can produce. A failure here
+      # stops the run rather than packaging with electron-builder's default icon,
+      # which is the silent version of this failure and the one that ships.
+      - name: Build the icon from its vector
+        run: ${{ matrix.icon }}
 
       - name: Build installers
         run: ${{ matrix.build }}
@@ -169,19 +191,20 @@ jobs:
       - name: A current npm
         run: npm install -g npm@latest
 
+      # Its one postinstall stays: it links the tool's Claude skill on a global
+      # install (scripts/link-skill.cjs). No skill, no release.
       - name: Shape the package for npm
         run: |
           npm pkg set name=@ponderdev/justjpeg
           npm pkg delete private devDependencies
+          test "$(npm pkg get scripts.postinstall)" = '"node scripts/link-skill.cjs"'
           node src/cli.mjs --version
-          npm pack --dry-run
+          npm pack --dry-run 2>&1 | tee pack.txt
+          grep -q 'agents/skills/justjpeg/SKILL.md' pack.txt
 
-      # npm only lets trusted publishing be set up on a package that already
-      # exists, so the very first version goes out with a short-lived token
-      # kept as the NPM_FIRST_PUBLISH secret, which is then deleted. Every
-      # version after that uses trusted publishing and no token at all.
+      # Trusted publishing (OIDC, id-token: write above): no token anywhere. A
+      # token in the environment would win over OIDC and fail, so there is none.
+      # Provenance comes with it.
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_FIRST_PUBLISH }}
-        run: npm publish --access public --provenance
+        run: npm publish --access public
 

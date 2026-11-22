@@ -1,0 +1,10 @@
+{
+  "kit": "1.0.0",
+  "synced": "2026-11-21",
+  "files": {
+    "src/renderer/kit/kit.css": "746c32b2712a02785faff7ccaca8077e18542f41e8e1a8669f1e2875c83a45c6",
+    "src/renderer/kit/kit.js": "0bee1615db0395535803380e32c5ad4da2a18f1360b12049dfedb2bc372e702d",
+    "src/kit/scan.cjs": "9760562b2481b43f9b1a1d95facfb0cc3323d4ddea49edcf4c52e5cf27bd5ed4",
+    "src/kit/window.cjs": "a1bfa74d79ca08caf8f3ad23790ffd6cd8821001ae831061dbf8202769e5402f"
+  }
+}

@@ -10,10 +10,12 @@ import UTIF from 'utif';
 import encodeMozjpeg, { init as initMozjpeg } from '@jsquash/jpeg/encode.js';
 import mozjpegWasm from '@jsquash/jpeg/codec/enc/mozjpeg_enc.wasm';
 import { render } from '../render.js';
-import { sniff } from '../sniff.js';
 import {
-  extractExif, readOrientation, setOrientation, finalizeJpeg, heifHasTransform, buildExif, iccFromHeif,
-} from '../exif.js';
+  sniff, extractExif, MESSAGES, decodeHeif as engineDecodeHeif, decodeTiff as engineDecodeTiff,
+  orientationFor, profileFor, jpegOptions, finishOutput, isCameraRaw, BACKGROUND,
+} from '../engine.js';
+import { buildExif } from '../exif.js';
+import { decodeRaw as decodeRawShared, RawTimeout } from '../raw.js';
 
 let heif = null;
 let libraw = null;
@@ -26,7 +28,7 @@ function getHeif() {
   return heif;
 }
 
-// The canvas encoder always writes 4:2:0, which throws away half the colour
+// The canvas encoder always writes 4:2:0, which throws away half the color
 // resolution and caps quality at about 37dB PSNR no matter how high the
 // quality setting goes. mozjpeg can write 4:4:4, so "highest quality" uses it.
 // It is several times slower, which is why it is not the default.
@@ -52,86 +54,23 @@ async function getLibRaw() {
 
 // ----------------------------------------------------------------- decoders ---
 
-async function decodeHeif(bytes) {
-  const lib = getHeif();
-  const images = new lib.HeifDecoder().decode(bytes);
-  if (!images || !images.length) throw new Error('No image found inside this HEIC file');
-
-  const img = images[0];
-  const width = img.get_width();
-  const height = img.get_height();
-  if (!width || !height) throw new Error('HEIC reports a zero-sized image');
-
-  const out = { width, height, data: new Uint8ClampedArray(width * height * 4) };
-  await new Promise((resolve, reject) => {
-    img.display(out, (result) => (result ? resolve(result) : reject(new Error('HEIC decode failed'))));
-  });
-  // Some builds hold native memory until told otherwise.
-  try { img.free && img.free(); } catch { /* not fatal */ }
-
-  return new ImageData(out.data, width, height);
+// The engine reads the file; this side only wraps the pixels for the canvas.
+async function heifToImageData(bytes) {
+  const out = await engineDecodeHeif(getHeif(), bytes);
+  return new ImageData(out.data, out.width, out.height);
 }
 
 /** Plain TIFFs (scanners, exports) are not RAW, so libraw refuses them. */
-function decodeTiff(bytes) {
-  const ifds = UTIF.decode(bytes);
-  if (!ifds || !ifds.length) throw new Error('No image found inside this TIFF');
-  const page = ifds[0];
-  UTIF.decodeImage(bytes, page, ifds);
-  const rgba = UTIF.toRGBA8(page);
-  if (!page.width || !page.height) throw new Error('TIFF reports a zero-sized image');
-  return new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.length), page.width, page.height);
+function tiffToImageData(bytes) {
+  const { image, orientation, icc } = engineDecodeTiff(UTIF, bytes);
+  return { image: new ImageData(image.data, image.width, image.height), orientation, icc };
 }
 
+// The decode itself is src/raw.js, the same code the command line runs; this
+// side only says where the LibRaw build is and wraps the pixels for the canvas.
 async function decodeRaw(bytes) {
-  const LibRaw = await getLibRaw();
-  const lr = new LibRaw();
-  try {
-    // open() hands the buffer to libraw's own worker, which detaches it. Pass
-    // a copy, or the caller is left holding an empty ArrayBuffer.
-    await lr.open(bytes.slice());
-    const img = await lr.imageData();
-    if (!img || !img.width || !img.height) throw new Error('RAW decoder returned no image');
-
-    const { width, height } = img;
-    const src = img.data;
-    const channels = src.length / (width * height);
-    const rgba = new Uint8ClampedArray(width * height * 4);
-
-    // libraw hands back 3- or 4-channel data, 8 or 16 bits deep.
-    const sixteenBit = src.BYTES_PER_ELEMENT === 2;
-    const shift = sixteenBit ? 8 : 0;
-    for (let i = 0, p = 0, q = 0; i < width * height; i++) {
-      rgba[q++] = shift ? src[p] >> shift : src[p]; p++;
-      rgba[q++] = shift ? src[p] >> shift : src[p]; p++;
-      rgba[q++] = shift ? src[p] >> shift : src[p]; p++;
-      rgba[q++] = channels >= 4 ? (shift ? src[p++] >> shift : src[p++]) : 255;
-    }
-
-    // A RAW file's own TIFF structure is far too large to embed in a JPEG, so
-    // collect the values we care about and write a small EXIF block later.
-    let meta = null;
-    try {
-      const m = await lr.metadata(true);
-      if (m) {
-        meta = {
-          make: m.camera_make,
-          model: m.camera_model,
-          date: m.timestamp,
-          iso: m.iso_speed,
-          exposureTime: m.shutter,
-          fNumber: m.aperture,
-          focalLength: m.focal_len,
-          artist: m.artist,
-          lens: m.lens && m.lens.Lens,
-        };
-      }
-    } catch { /* metadata is a bonus, not a reason to fail the conversion */ }
-
-    return { image: new ImageData(rgba, width, height), meta };
-  } finally {
-    try { lr.dispose(); } catch { /* already gone */ }
-  }
+  const out = await decodeRawShared(bytes, { loadLibRaw: getLibRaw });
+  return { image: new ImageData(out.data, out.width, out.height), meta: out.meta };
 }
 
 async function decodeNative(bytes) {
@@ -146,25 +85,41 @@ async function toDrawable(decoded) {
 
 // -------------------------------------------------------------------- main ---
 
-async function convert({ bytes, format, quality, maxDim, keepMetadata, maxQuality }) {
+async function convert({ bytes, name = '', format, quality, maxDim, keepMetadata, maxQuality }) {
   const input = new Uint8Array(bytes);
-  const kind = sniff(input);
-  if (kind === 'unknown') throw new Error('Not an image file we recognise');
+  let kind = sniff(input);
+  if (kind === 'unknown') throw new Error(MESSAGES.unknown);
 
   let decoded;
   let rawMeta = null;
+  let tiffTurn = 1;     // a plain TIFF's own orientation and colour profile
+  let tiffIcc = null;
   if (kind === 'heif') {
-    decoded = await decodeHeif(input);
+    try {
+      decoded = await heifToImageData(input);
+    } catch (heifError) {
+      // The bundled libheif reads HEIC (HEVC) but has no AV1, so an AVIF fails
+      // there. The browser's own decoder takes AVIF, and turns it upright itself.
+      try {
+        decoded = await decodeNative(input);
+        kind = 'native';
+      } catch { throw heifError; }
+    }
   } else if (kind === 'raw') {
     // TIFF-based files split two ways: real camera RAW, and ordinary TIFFs
-    // that libraw will not touch. Try RAW first, then fall back.
+    // that libraw will not touch. Try RAW first, then fall back, but only for
+    // a file that is not a camera RAW: a damaged RAW would give its small
+    // embedded preview through the TIFF reader (engine.js, isCameraRaw).
     try {
       const result = await decodeRaw(input);
       decoded = result.image;
       rawMeta = result.meta;
     } catch (rawError) {
+      if (isCameraRaw(input, name)) {
+        throw new Error(rawError instanceof RawTimeout ? rawError.message : MESSAGES.rawDamaged);
+      }
       try {
-        decoded = decodeTiff(input);
+        ({ image: decoded, orientation: tiffTurn, icc: tiffIcc } = tiffToImageData(input));
       } catch (tiffError) {
         throw new Error(`${rawError.message} (also tried TIFF: ${tiffError.message})`);
       }
@@ -180,23 +135,14 @@ async function convert({ bytes, format, quality, maxDim, keepMetadata, maxQualit
   let tiff = extractExif(input);
   if (!tiff && rawMeta) tiff = buildExif(rawMeta);
 
-  // Only HEIF needs its profile carried by hand. createImageBitmap already
-  // converts other formats into the canvas colour space, and libraw outputs
-  // sRGB, so in both of those cases an untagged JPEG is already correct.
-  const icc = kind === 'heif' ? iccFromHeif(input) : null;
-
-  // Work out whether the pixels we just got back are already upright.
-  //   native : createImageBitmap honours EXIF orientation itself
-  //   heif   : libheif applies container rotation (irot/imir) while decoding
-  //   raw    : libraw applies the camera's flip while processing
-  // Rotating again in any of those cases would tip the photo on its side.
-  let orientation = 1;
-  if (kind === 'heif' && !heifHasTransform(input)) {
-    orientation = tiff ? readOrientation(tiff) : 1;
-  }
+  // Which profile to carry and which turn is still ours are the engine's
+  // decisions (the same ones the command line makes); here createImageBitmap
+  // honours a JPEG's EXIF itself and libheif and libraw have turned theirs.
+  const icc = profileFor({ kind, bytes: input, tiffIcc });
+  const orientation = orientationFor({ kind, backend: 'app', tiff, bytes: input, tiffTurn });
 
   const drawable = await toDrawable(decoded);
-  const canvas = render(drawable, srcW, srcH, orientation, maxDim, format === 'png' ? null : '#ffffff');
+  const canvas = render(drawable, srcW, srcH, orientation, maxDim, format === 'png' ? null : BACKGROUND);
   try { drawable.close && drawable.close(); } catch { /* fine */ }
 
   let out;
@@ -204,13 +150,7 @@ async function convert({ bytes, format, quality, maxDim, keepMetadata, maxQualit
     await getMozjpeg();
     const ctx = canvas.getContext('2d');
     const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const encoded = await encodeMozjpeg(pixels, {
-      quality,
-      auto_subsample: false,
-      chroma_subsample: 1,     // 4:4:4, full colour resolution
-      progressive: true,
-      optimize_coding: true,
-    });
+    const encoded = await encodeMozjpeg(pixels, jpegOptions({ quality, best: true }));   // 4:4:4, full colour resolution
     out = new Uint8Array(encoded);
   } else {
     const mime = format === 'png' ? 'image/png' : 'image/jpeg';
@@ -218,16 +158,9 @@ async function convert({ bytes, format, quality, maxDim, keepMetadata, maxQualit
     out = new Uint8Array(await blob.arrayBuffer());
   }
 
-  // PNG metadata is a different container entirely; we only carry EXIF into
-  // JPEG, which is where people actually rely on it. The colour profile goes
-  // across either way it is available, since dropping it visibly dulls the
-  // photo.
-  if (format !== 'png') {
-    out = finalizeJpeg(out, {
-      exif: keepMetadata && tiff ? setOrientation(tiff, 1) : null,
-      icc,
-    });
-  }
+  // PNG carries no EXIF; JPEG gets the photo details, the profile and the
+  // mark. All the engine's, the same as the command line's.
+  out = finishOutput({ format, bytes: out, tiff, icc, keepMetadata, width: canvas.width, height: canvas.height });
 
   return { bytes: out, width: canvas.width, height: canvas.height };
 }

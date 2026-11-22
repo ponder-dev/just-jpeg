@@ -1,33 +1,47 @@
 #!/usr/bin/env node
 // Just JPEG on the command line.
 //
-// The same decoders, the same EXIF handling and the same output rules as the
-// app, shared rather than reimplemented. What it cannot share is the drawing:
-// the app rotates and scales on a canvas, so the command line has src/pixels.js
-// and @jsquash/resize doing that job on raw buffers.
+// The same engine as the app (src/engine.js), not a copy of it: the settings
+// and their limits, which files count, where each result goes and what is
+// skipped, how a picture is turned and sized, what travels into the file, the
+// words for a failure or a skip. The window's main process and its conversion
+// worker call that same module, and test/engine.test.mjs fails if either side
+// grows a private copy of a decision again.
 //
-// One deliberate difference, stated everywhere it matters: NO CAMERA RAW.
-// The RAW decoder is a web-only build that needs browser workers, and it does
-// not survive node. The app converts RAW; this refuses it politely. HEIC,
-// which is why this tool exists, works fully.
+// What it cannot share is what is not a decision: the drawing (the app rotates
+// and scales on a canvas; the command line has src/pixels.js and
+// @jsquash/resize doing that job on raw buffers), the codecs each side loads,
+// and its own file and terminal I/O.
+//
+// Camera RAW goes through the app's own decoder (LibRaw, in src/raw.js, the
+// code the window's worker runs too). That decoder is a browser build that
+// starts workers and loads its files like a web page, so src/rawshim.js gives
+// it those over node's worker_threads. What the command line still leaves to
+// the app: AVIF, GIF and BMP, which the browser's decoder reads.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { createRequire } from 'node:module';
 
-import { sniff } from './sniff.js';
-import { orient } from './pixels.js';
-import { planOutput, pathKey } from './paths.js';
+import { orient, flattenOnWhite } from './pixels.js';
+import { isOurs } from './paths.js';
+import { decodeRaw, createGate, RawTimeout } from './raw.js';
+import { buildExif } from './exif.js';
 import {
-  extractExif, readOrientation, setOrientation, finalizeJpeg, heifHasTransform, iccFromHeif,
-} from './exif.js';
+  sniff, extractExif, MESSAGES, labelled, decodeHeif, decodeTiff, orientationFor, profileFor,
+  fitScale, fitSize, jpegOptions, finishOutput, createBatchPlanner, skipText, skipCode, tempPath, settingsProblem,
+  extensionsFor, isCameraRaw, DEFAULTS,
+} from './engine.js';
 
 const require_ = createRequire(import.meta.url);
 const VERSION = require_('../package.json').version;
+// The family's folder intake, one copy for the app and this command line.
+const kit = require_('./kit/scan.cjs');
+const { scan, VERSION: KIT_VERSION } = kit;
 
-const INPUT_EXTS = new Set(['.heic', '.heif', '.avif', '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp']);
-const RAW_EXTS = new Set(['.dng', '.cr2', '.cr3', '.nef', '.arw', '.orf', '.rw2', '.raf', '.raw', '.srw', '.pef']);
+// The kinds it converts: the engine's list for this side.
+const CONVERTS = new Set(extensionsFor('cli'));
 
 /* --- wasm plumbing ------------------------------------------------------ */
 
@@ -57,53 +71,61 @@ async function codec(name) {
 /* --- decoding ----------------------------------------------------------- */
 
 let heifLib = null;
+// One camera RAW file in memory at a time: a big one is hundreds of megabytes
+// once decoded. (The command line goes file by file anyway; this keeps it so.)
+const rawGate = createGate(1);
+// LibRaw and the shim load only when a RAW file turns up.
+const loadRaw = async () => (await import('./raw-node.js')).loadLibRawInNode();
 
 async function decode(bytes, label) {
   const kind = sniff(bytes);
 
   if (kind === 'heif') {
     if (!heifLib) heifLib = require_('libheif-js');
-    const images = new heifLib.HeifDecoder().decode(bytes);
-    if (!images || !images.length) throw new Error('No image found inside this HEIC file');
-    const img = images[0];
-    const width = img.get_width();
-    const height = img.get_height();
-    const out = { width, height, data: new Uint8ClampedArray(width * height * 4) };
-    await new Promise((resolve, reject) => {
-      img.display(out, (ok) => (ok ? resolve() : reject(new Error('HEIC decode failed'))));
-    });
-    try { img.free && img.free(); } catch { /* fine */ }
-    // libheif applies the container's own rotation while decoding. Only when
-    // the file has none does the EXIF orientation still need applying: the
-    // same rule the app uses.
-    let orientation = 1;
+    let image;
+    try {
+      image = await decodeHeif(heifLib, bytes);
+    } catch (err) {
+      // The libheif here reads HEIC (HEVC) but has no AV1, and node has no
+      // browser decoder to lean on, so AVIF is the app's, as RAW is.
+      const brand = String.fromCharCode(...bytes.subarray(8, 12));
+      if (brand === 'avif' || brand === 'avis') {
+        throw new Error(`${label}: looks like AVIF, which the command line does not convert. The Just JPEG app does: https://ponderdev.com/justjpeg`);
+      }
+      throw err;
+    }
     const tiff = extractExif(bytes);
-    if (!heifHasTransform(bytes)) orientation = tiff ? readOrientation(tiff) : 1;
-    return { image: out, orientation, tiff, icc: iccFromHeif(bytes) };
+    return {
+      image,
+      orientation: orientationFor({ kind, backend: 'cli', tiff, bytes }),
+      tiff,
+      icc: profileFor({ kind, bytes }),
+    };
   }
 
   if (kind === 'raw') {
-    // TIFF-shaped files are either an ordinary TIFF, which is fine, or real
-    // camera RAW, which the command line does not do. Try TIFF, and if the
-    // file is beyond it, say why plainly instead of failing strangely.
+    // TIFF-shaped files are either real camera RAW or an ordinary TIFF, which
+    // LibRaw will not touch. Try RAW first, then TIFF (only for a file that is
+    // not a camera RAW), as the app does. LibRaw
+    // returns the picture upright already, so nothing is turned again.
+    let rawError;
     try {
-      const UTIF = require_('utif');
-      const ifds = UTIF.decode(bytes);
-      if (!ifds || !ifds.length) throw new Error('no pages');
-      UTIF.decodeImage(bytes, ifds[0], ifds);
-      const rgba = UTIF.toRGBA8(ifds[0]);
-      if (!ifds[0].width || !ifds[0].height) throw new Error('zero-sized');
-      return {
-        image: { data: new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.length), width: ifds[0].width, height: ifds[0].height },
-        orientation: 1,
-        tiff: extractExif(bytes),
-        icc: null,
-      };
-    } catch {
-      throw new Error(
-        `${label}: looks like camera RAW, which the command line does not convert. ` +
-        'The Just JPEG app does: https://ponderdev.com/justjpeg',
-      );
+      const out = await rawGate(() => decodeRaw(bytes, { loadLibRaw: loadRaw }));
+      const tiff = extractExif(bytes) || (out.meta ? buildExif(out.meta) : null);
+      return { image: out, orientation: orientationFor({ kind, backend: 'cli', tiff, bytes }), tiff, icc: profileFor({ kind, bytes }) };
+    } catch (err) {
+      rawError = err;
+    }
+    // A camera RAW that LibRaw cannot read is damaged: the TIFF reader would
+    // find only its small embedded preview, so it fails here instead.
+    if (isCameraRaw(bytes, label)) {
+      throw new Error(labelled(label, rawError instanceof RawTimeout ? rawError.message : MESSAGES.rawDamaged));
+    }
+    try {
+      const { image, orientation, icc } = decodeTiff(require_('utif'), bytes);
+      return { image, orientation, tiff: extractExif(bytes), icc };
+    } catch (tiffError) {
+      throw new Error(`${label}: ${rawError.message} (also tried TIFF: ${tiffError.message})`);
     }
   }
 
@@ -112,9 +134,9 @@ async function decode(bytes, label) {
     if (b[0] === 0xff && b[1] === 0xd8) {
       const image = await (await codec('jpeg-decode'))(bytes);
       // The app leans on the browser to apply EXIF rotation to JPEGs. There
-      // is no browser here, so read it and apply it ourselves.
+      // is no browser here, so the engine reads it for us to apply.
       const tiff = extractExif(bytes);
-      return { image, orientation: tiff ? readOrientation(tiff) : 1, tiff, icc: null };
+      return { image, orientation: orientationFor({ kind, backend: 'cli', tiff }), tiff, icc: null };
     }
     if (b[0] === 0x89 && b[1] === 0x50) {
       return { image: await (await codec('png-decode'))(bytes), orientation: 1, tiff: null, icc: null };
@@ -125,34 +147,18 @@ async function decode(bytes, label) {
     throw new Error(`${label}: GIF and BMP need the app; the command line reads HEIC, JPEG, PNG, TIFF and WEBP`);
   }
 
-  throw new Error(`${label}: not an image file we recognise`);
+  throw new Error(labelled(label, MESSAGES.unknown));
 }
 
 /* --- the conversion ----------------------------------------------------- */
-
-// JPEG has no alpha, and mozjpeg simply drops it, so a transparent pixel showed
-// whatever colour happened to sit under it. Blend onto white, as the app does.
-function flattenOnWhite(data) {
-  for (let i = 3; i < data.length; i += 4) {
-    const a = data[i];
-    if (a === 255) continue;
-    const k = 255 - a;
-    data[i - 3] = Math.round((data[i - 3] * a + 255 * k) / 255);
-    data[i - 2] = Math.round((data[i - 2] * a + 255 * k) / 255);
-    data[i - 1] = Math.round((data[i - 1] * a + 255 * k) / 255);
-    data[i] = 255;
-  }
-}
 
 async function convert(bytes, opts, label) {
   const { image, orientation, tiff, icc } = await decode(bytes, label);
 
   let upright = orient(image, orientation);
 
-  if (opts.size && Math.max(upright.width, upright.height) > opts.size) {
-    const scale = opts.size / Math.max(upright.width, upright.height);
-    const width = Math.max(1, Math.round(upright.width * scale));
-    const height = Math.max(1, Math.round(upright.height * scale));
+  if (fitScale(upright.width, upright.height, 1, opts.size) < 1) {
+    const { width, height } = fitSize(upright.width, upright.height, 1, opts.size);
     upright = await (await codec('resize'))(
       { data: upright.data, width: upright.width, height: upright.height },
       { width, height },
@@ -163,48 +169,40 @@ async function convert(bytes, opts, label) {
   if (opts.format === 'png') {
     out = new Uint8Array(await (await codec('png-encode'))(upright));
   } else {
+    // JPEG has no alpha: blend onto white, as the app does.
     flattenOnWhite(upright.data);
-    const encoded = await (await codec('jpeg-encode'))(upright, {
-      quality: opts.quality,
-      // --best keeps full colour resolution, the app's "highest quality" box.
-      ...(opts.best ? { auto_subsample: false, chroma_subsample: 1 } : {}),
-      progressive: true,
-      optimize_coding: true,
-    });
-    out = new Uint8Array(encoded);
-    // Metadata rides across exactly as in the app: the raw EXIF block with
-    // orientation rewritten to "already upright". PNG has no EXIF to carry.
-    out = finalizeJpeg(out, {
-      exif: opts.keepMetadata && tiff ? setOrientation(tiff, 1) : null,
-      icc,
-    });
+    out = new Uint8Array(await (await codec('jpeg-encode'))(upright, jpegOptions({ quality: opts.quality, best: opts.best })));
   }
+
+  // Details, profile and Just JPEG's mark go on exactly as in the app.
+  out = finishOutput({ format: opts.format, bytes: out, tiff, icc, keepMetadata: opts.keepMetadata, width: upright.width, height: upright.height });
 
   return { bytes: out, width: upright.width, height: upright.height };
 }
 
 /* --- files and folders --------------------------------------------------- */
 
-function gather(inputs) {
-  const files = [];
-  const skipped = [];
-  const walk = (p) => {
-    const st = fs.statSync(p);
-    if (st.isDirectory()) {
-      for (const entry of fs.readdirSync(p).sort()) {
-        if (!entry.startsWith('.')) walk(path.join(p, entry));
-      }
-      return;
-    }
-    const ext = path.extname(p).toLowerCase();
-    if (INPUT_EXTS.has(ext)) files.push(p);
-    else if (RAW_EXTS.has(ext)) skipped.push(p);
-  };
-  for (const input of inputs) {
-    if (!fs.existsSync(input)) throw new UsageError(`No such file: ${input}`);
-    walk(input);
+// What a folder holds comes from the kit's intake, as in the app: only the
+// kinds this tool takes, subfolders too, hidden files and its own results
+// folders ("Holiday (JPEG)") passed over. A file named on its own must be a
+// kind it takes (RAW is named so it can be told about). Each file keeps the
+// folder it was found in (from), which decides where its result goes.
+async function gather(inputs) {
+  const found = await scan(inputs, { extensions: extensionsFor('cli'), anyNamed: false, word: 'JPEG' });
+  if (found.missing.length) throw new UsageError(`No such file: ${found.missing[0]}`);
+  return { files: found.files };
+}
+
+// A file's first bytes, which is all the plan needs to know what it is.
+function readHead(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(64);
+    return new Uint8Array(buf.subarray(0, fs.readSync(fd, buf, 0, 64, 0)));
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
-  return { files, skipped };
 }
 
 /* --- interface ----------------------------------------------------------- */
@@ -216,12 +214,13 @@ function gather(inputs) {
  */
 const OPTIONS = [
   { flags: ['-f', '--format'], name: 'format', metavar: 'jpeg|png', type: 'string', values: ['jpeg', 'png'], default: 'jpeg', help: 'what to write' },
-  { flags: ['-q', '--quality'], name: 'quality', metavar: '40-100', type: 'integer', range: [40, 100], default: 85, help: 'jpeg quality, the app\'s default' },
+  { flags: ['-q', '--quality'], name: 'quality', metavar: '40-100', type: 'integer', range: [40, 100], default: DEFAULTS.quality, help: 'jpeg quality, the app\'s default' },
   { flags: ['-s', '--size'], name: 'size', metavar: 'pixels', type: 'integer', default: 0, help: 'shrink so the long edge is at most this. 0 keeps the size' },
-  { flags: ['-o', '--out', '--output'], name: 'output', metavar: 'dir', type: 'path', default: null, help: 'the folder to write into. default: beside each original' },
+  { flags: ['-o', '--out', '--output'], name: 'output', metavar: 'dir', type: 'path', default: null, help: 'the folder to write into (a folder\'s own subfolders are mirrored inside it). default: beside each file named on its own; a folder\'s results go in a new "folder (JPEG)" beside it' },
+  { flags: ['--beside'], name: 'beside', type: 'boolean', help: 'with a folder, save each result beside its original instead of in a new "folder (JPEG)"' },
   { flags: ['--strip'], name: 'strip', type: 'boolean', help: 'drop the metadata (date, camera, location)' },
   { flags: ['--best'], name: 'best', type: 'boolean', help: 'full colour resolution, slower, for keepers' },
-  { flags: ['--overwrite'], name: 'overwrite', type: 'boolean', help: 'replace this tool\'s own earlier output instead of renaming. Never an original' },
+  { flags: ['--overwrite'], name: 'overwrite', type: 'boolean', help: 'replace a file already there with the same name instead of renaming, but only a file Just JPEG made (it marks every picture it writes). Never an original, never a real photo of yours, and never a file among the ones being converted: those are renamed, "name 2.jpg", as before' },
   { flags: ['--dry-run'], name: 'dry-run', type: 'boolean', help: 'say what would be written, and write nothing' },
   { flags: ['--json'], name: 'json', type: 'boolean', help: 'one JSON line per file, then a done line' },
   { flags: ['--quiet'], name: 'quiet', type: 'boolean', help: 'say nothing but errors' },
@@ -246,7 +245,7 @@ function usage() {
     return `${left.padEnd(30)} ${o.help}${o.default !== undefined && o.default !== null && o.type !== 'boolean' ? `. default: ${o.default}` : ''}`;
   }).join('\n');
   return `Just JPEG ${VERSION}
-Converts HEIC photos (and HEIF, AVIF, JPEG, PNG, TIFF, WEBP) to JPEG or PNG.
+Converts HEIC photos and camera RAW files (and HEIF, JPEG, PNG, TIFF, WEBP) to JPEG or PNG.
 
   justjpeg <files or folders> [options]
   cat IMG_0123.heic | justjpeg > IMG_0123.jpg
@@ -256,9 +255,15 @@ ${opts}
 
 Exit status: 0 done, 1 failed, 2 usage, 3 some files failed.
 
-No camera RAW here. The app converts RAW (and GIF and BMP); this does not,
-because the RAW decoder needs a browser to run in. Everything else matches
-the app: originals are only ever read, dates and cameras survive, and
+A file that looks like an earlier result (photo.jpg beside photo.heic, or
+photo 2.jpg) is left alone and reported as a skip. An edited IMG_0001.JPG kept
+beside IMG_0001.HEIC looks the same: name it on its own to convert it. JPEG
+has no see-through, so transparent areas turn white (use -f png to keep them).
+
+Camera RAW (DNG, CR2, CR3, NEF, ARW, RAF, ORF, RW2 and the rest) goes through
+the same decoder as the app, one file at a time; a large one takes a few
+seconds and a lot of memory. AVIF, GIF and BMP need the app. Everything else
+matches the app: originals are only ever read, dates and cameras survive, and
 nothing is uploaded anywhere.`;
 }
 
@@ -269,14 +274,17 @@ function describe() {
     product: 'Just JPEG',
     version: VERSION,
     licence: require_('../package.json').license,
+    // The kit the app is built with (decided 2026-11-20), from the kit's own copy.
+    kit: KIT_VERSION,
     command: 'justjpeg',
-    job: 'Convert HEIC and other photos to JPEG or PNG, keeping dates and cameras.',
+    job: 'Convert HEIC, camera RAW and other photos to JPEG or PNG, keeping dates and cameras.',
     network: false,
-    accepts: { mediaTypes: ['image/heic', 'image/heif', 'image/avif', 'image/jpeg', 'image/png', 'image/tiff', 'image/webp'], extensions: [...INPUT_EXTS] },
+    accepts: { mediaTypes: ['image/heic', 'image/heif', 'image/jpeg', 'image/png', 'image/tiff', 'image/webp', 'image/x-adobe-dng', 'image/x-canon-cr2', 'image/x-canon-cr3', 'image/x-nikon-nef', 'image/x-sony-arw', 'image/x-fuji-raf', 'image/x-olympus-orf', 'image/x-panasonic-rw2'], extensions: [...CONVERTS] },
+    output: 'name.jpg (or .png) beside a file named on its own; a folder\'s results in a new folder beside it, "folder (JPEG)" (then "folder (JPEG) 2"), subfolders mirrored, names kept, the folder itself untouched, and complete: a photo already in the output format is copied in as it is (a result line with copied: true); --beside puts every result beside its original; -o writes into that folder instead; a taken name becomes "name 2.jpg", never over an existing file (--overwrite replaces only a file Just JPEG itself made: every picture it writes carries a small mark, a JPEG comment or PNG text "Just JPEG"; copied-in photos carry none)',
     emits: { mediaTypes: ['image/jpeg', 'image/png'], extensions: ['.jpg', '.png'] },
     arguments: [{ name: 'input', type: 'path', required: false, repeatable: true, help: 'files or folders. None reads one image from stdin' }],
     options: OPTIONS,
-    result: { fields: { input: 'path', output: 'path', in: 'path', out: 'path', width: 'integer', height: 'integer', bytes: 'integer' } },
+    result: { fields: { input: 'path', output: 'path', in: 'path', out: 'path', copied: 'boolean', width: 'integer', height: 'integer', bytes: 'integer' } },
     needs: [],
     io: {
       stdin: 'one image, read when no input is named and stdin is not a terminal (gives up after 10 seconds of nothing)',
@@ -284,6 +292,12 @@ function describe() {
       stderr: 'a line per file for people, and errors',
     },
     exitCodes: EXIT,
+    skips: {
+      'earlier-output': 'looks like this tool\'s own earlier result: the same name as another photo in the batch in another format, or that name with " 2", " 3" after it. Only beside the originals. An edited IMG_0001.JPG beside IMG_0001.HEIC is skipped too; name it on its own to convert it',
+      original: 'the result would land on the original itself',
+      'output-exists': 'the name is taken',
+    },
+    notes: ['camera RAW is decoded by the same LibRaw as the app, one file at a time, with a time limit on each; the picture comes out upright and the camera, lens, exposure and date are kept (no location)', 'JPEG has no see-through: transparent areas of a PNG, WebP or TIFF turn white. -f png keeps them', 'a TIFF\'s own orientation and colour profile are applied and carried'],
     guarantees: ['never writes over an original', 'writes to a temporary name and renames, so a stopped run leaves no half image', 'nothing is uploaded'],
   };
 }
@@ -308,10 +322,19 @@ const report = {
 
 // The temporary file being written, removed if a signal stops the run.
 let writing = null;
+// A results folder made for the file being written ([dir, folder]), removed on a
+// signal or a failed save if it is still empty.
+let madeFor = null;
+function removeIfEmpty([dir, folder]) {
+  for (; dir.startsWith(folder); dir = path.dirname(dir)) {
+    try { fs.rmdirSync(dir); } catch { break; }
+    if (dir === folder) break;
+  }
+}
 
 function parseArgs(argv) {
-  const o = { inputs: [], format: 'jpeg', quality: 85, size: 0, out: null,
-              keepMetadata: true, best: false, onExisting: 'rename',
+  const o = { inputs: [], format: DEFAULTS.format, quality: DEFAULTS.quality, size: DEFAULTS.size, out: null,
+              keepMetadata: true, best: false, onExisting: 'rename', beside: false,
               json: false, quiet: false, dryRun: false };
   // An option at the end with no value used to fall through as undefined, so
   // `-o` alone quietly wrote beside the originals, and `-o --json` made a
@@ -327,6 +350,7 @@ function parseArgs(argv) {
     else if (a === '-s' || a === '--size') o.size = Number(value(++i, '--size'));
     else if (a === '-o' || a === '--out' || a === '--output') o.out = value(++i, '--out');
     else if (a === '--dry-run') o.dryRun = true;
+    else if (a === '--beside') o.beside = true;
     else if (a === '--strip') o.keepMetadata = false;
     else if (a === '--best') o.best = true;
     else if (a === '--overwrite') o.onExisting = 'overwrite';
@@ -335,10 +359,8 @@ function parseArgs(argv) {
     else if (a.startsWith('-') && a !== '-') throw new UsageError(`Unknown option "${a}"`);
     else o.inputs.push(a);
   }
-  if (!['jpeg', 'png'].includes(o.format)) throw new UsageError(`--format is jpeg or png, not "${o.format}"`);
-  if (!(o.quality >= 40 && o.quality <= 100)) throw new UsageError('--quality is 40 to 100');
-  // A negative size used to shrink every image to 1x1, and a word was ignored.
-  if (!(Number.isInteger(o.size) && o.size >= 0)) throw new UsageError('--size is a whole number of pixels');
+  const problem = settingsProblem(o);
+  if (problem) throw new UsageError(problem);
   return o;
 }
 
@@ -389,39 +411,50 @@ async function main(argv) {
   }
   if (!opts.inputs.length) throw new UsageError('Name a file or folder to convert. justjpeg --help says how.');
 
-  const { files, skipped } = gather(opts.inputs);
-  if (!files.length && !skipped.length) throw new UsageError('Nothing here that looks like an image');
+  const { files: found } = await gather(opts.inputs);
+  const files = found.map((f) => f.path);
+  if (!files.length) throw new UsageError('Nothing here that looks like an image');
 
-  // Paths this run must not replace: every original in it, and every output
-  // already claimed, so --overwrite only ever replaces older output.
-  const taken = new Set(files.map((f) => pathKey(f)));
+  // The plan is the engine's, the same one the window runs: where each result
+  // goes, what is left alone, what is never replaced.
+  const planner = createBatchPlanner({
+    path,
+    platform: process.platform,
+    files: found,
+    settings: { format: opts.format, onExisting: opts.onExisting, outDir: opts.out, beside: opts.beside },
+    kit,
+    exists: fs.existsSync,
+    ours: isOurs,
+  });
+  const saved = new Set();
   let failed = 0;
+  let copiedCount = 0;
   for (const file of files) {
     try {
-      const bytes = new Uint8Array(fs.readFileSync(file));
-      const plan = planOutput(
-        { sourcePath: file, outDir: opts.out, format: opts.format, onExisting: opts.onExisting },
-        fs.existsSync,
-        process.platform,
-        (p) => taken.has(pathKey(p)),
-      );
-      taken.add(pathKey(plan.path));
+      const plan = await planner.plan(file, () => readHead(file));
+      if (plan.action === 'skip' && plan.unreadable) throw new Error(labelled(path.basename(file), MESSAGES.unknown));
       if (plan.action === 'skip') {
-        report.skip({ input: file, in: file, output: plan.path, reason: 'output-exists', message: `${path.basename(plan.path)} is already there` });
-        if (!opts.quiet && !report.on) process.stderr.write(`skip  ${file} (output exists)\n`);
+        const why = skipText(plan, 'cli');
+        report.skip({ input: file, in: file, ...(plan.path ? { output: plan.path } : {}), reason: skipCode(plan), ...(plan.from ? { from: plan.from } : {}), message: why });
+        if (!opts.quiet && !report.on) process.stderr.write(`skip  ${file} (${why})\n`);
         continue;
       }
+      // In a folder's results folder a photo already in the output format is
+      // copied in as it is, so the folder is complete (the plan says so).
+      const copy = plan.copy;
       if (opts.dryRun) {
-        report.result({ ok: true, dryRun: true, input: file, in: file, output: plan.path, out: plan.path });
-        if (!opts.quiet && !report.on) process.stderr.write(`would ${file} -> ${plan.path}\n`);
+        report.result({ ok: true, dryRun: true, input: file, in: file, output: plan.path, out: plan.path, ...(copy ? { copied: true } : {}) });
+        if (!opts.quiet && !report.on) process.stderr.write(`${copy ? 'would copy' : 'would'} ${file} -> ${plan.path}\n`);
         continue;
       }
-      const r = await convert(bytes, opts, path.basename(file));
-      if (opts.out) fs.mkdirSync(opts.out, { recursive: true });
+      const bytes = new Uint8Array(fs.readFileSync(file));
+      const r = copy ? { bytes, copied: true } : await convert(bytes, opts, path.basename(file));
+      fs.mkdirSync(path.dirname(plan.path), { recursive: true });
+      if (plan.folder) madeFor = [path.dirname(plan.path), plan.folder];
       // Write beside the target then rename, as the app does, so a run killed
       // mid-write never leaves half an image, least of all over a good one
       // that --overwrite was replacing.
-      const temp = `${plan.path}.justjpeg-${process.pid}.tmp`;
+      const temp = tempPath(plan.path, process.pid);
       try {
         writing = temp;
         fs.writeFileSync(temp, r.bytes);
@@ -430,11 +463,20 @@ async function main(argv) {
       } catch (err) {
         writing = null;
         try { fs.unlinkSync(temp); } catch { /* nothing to clean up */ }
+        if (madeFor) removeIfEmpty(madeFor);
         throw err;
       }
-      report.result({ ok: true, input: file, output: plan.path, in: file, out: plan.path, width: r.width, height: r.height, bytes: r.bytes.length });
-      if (!report.on && !opts.quiet) {
-        process.stderr.write(`ok    ${file} -> ${plan.path}  ${r.width}x${r.height}\n`);
+      madeFor = null;
+      if (plan.folder) saved.add(plan.folder);
+      if (r.copied) {
+        copiedCount++;
+        report.result({ ok: true, input: file, output: plan.path, in: file, out: plan.path, copied: true, bytes: r.bytes.length });
+        if (!report.on && !opts.quiet) process.stderr.write(`copy  ${file} -> ${plan.path}  (already ${opts.format === 'png' ? 'PNG' : 'JPEG'}, copied as it is)\n`);
+      } else {
+        report.result({ ok: true, input: file, output: plan.path, in: file, out: plan.path, width: r.width, height: r.height, bytes: r.bytes.length });
+        if (!report.on && !opts.quiet) {
+          process.stderr.write(`ok    ${file} -> ${plan.path}  ${r.width}x${r.height}\n`);
+        }
       }
     } catch (err) {
       failed++;
@@ -444,13 +486,7 @@ async function main(argv) {
     }
   }
 
-  for (const s of skipped) {
-    report.skip({ input: s, in: s, reason: 'raw', message: 'needs the app, the command line does not do RAW' });
-    if (!opts.quiet && !report.on) process.stderr.write(`raw   ${s} needs the app, the command line does not do RAW\n`);
-  }
-  if (skipped.length && !failed && !opts.quiet) {
-    process.stderr.write(`${skipped.length} RAW file${skipped.length > 1 ? 's' : ''} left alone. https://ponderdev.com/justjpeg\n`);
-  }
+  if (saved.size && !opts.quiet && !report.on) process.stderr.write(`Saved in ${[...saved].join(', ')}${copiedCount ? ` (${copiedCount} already ${opts.format === 'png' ? 'PNG' : 'JPEG'}, copied as they are)` : ''}\n`);
   if (!failed) return 0;
   return report.counts.results ? 3 : 1;
 }
@@ -458,6 +494,7 @@ async function main(argv) {
 for (const [sig, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGTERM', 143]]) {
   process.on(sig, () => {
     if (writing) { try { fs.unlinkSync(writing); } catch { /* not there yet */ } }
+    if (madeFor) removeIfEmpty(madeFor);
     process.exit(code);
   });
 }

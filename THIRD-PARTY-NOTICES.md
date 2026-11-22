@@ -33,11 +33,18 @@ Reads camera RAW files, including Apple ProRAW `.dng`.
   v2.1 option.
 - LibRaw includes code derived from Dave Coffin's dcraw.
 - Full text: `licenses/libraw-lgpl-2.1.txt`
+- How each side loads it: the app copies the package's build, as it is, into
+  `app/renderer/vendor/libraw/` and runs it in a web worker. The command line
+  (`justjpeg` from npm, or the one inside the app) loads the same package from
+  `node_modules/libraw-wasm/` in node, where `src/rawshim.js` and
+  `src/rawshim-worker.js`, our own small files over node's `worker_threads`,
+  give it the workers and file loading a browser would. The decoder is not
+  modified in either place.
 
 ## mozjpeg
 
 Encodes the "highest quality" JPEGs. The browser's own encoder always writes
-4:2:0 chroma, which permanently halves colour resolution and caps quality at
+4:2:0 chroma, which permanently halves color resolution and caps quality at
 around 37dB PSNR however high the quality slider goes. mozjpeg can write full
 4:4:4 chroma, so it is used when maximum quality is asked for.
 
@@ -97,9 +104,12 @@ carries obligations, and Just JPEG meets them like this:
 3. **Source.** Each project is linked above. None of them were modified for
    Just JPEG; the published builds are used as-is.
 4. **Relinking.** Just JPEG's own source is published, and the libraries are
-   ordinary npm dependencies compiled by `scripts/bundle.mjs`. Anyone can swap
-   in their own build of libheif or LibRaw and rebuild the app with
-   `npm install && npm run dist`.
+   ordinary npm dependencies. The app uses them as `scripts/bundle.mjs` copies
+   or bundles them; the command line loads them from `node_modules` at run
+   time, LibRaw included (`libraw-wasm/dist/`, loaded by `src/raw-node.js`).
+   Anyone can swap in their own build of libheif or LibRaw, by replacing the
+   package in `node_modules` for the command line or with
+   `npm install && npm run dist` for the app.
 
 ## A note on HEVC patents
 
@@ -108,3 +118,20 @@ countries. Just JPEG decodes HEVC with libde265, an independent open source
 decoder, and never encodes HEVC. Apple licenses HEVC for the devices that
 create these files. If you are redistributing Just JPEG commercially or at
 scale, take your own advice on what that means where you operate.
+
+## Test files from raw.pixls.us
+
+The camera RAW files the tests use (one per maker: Canon, Nikon, Sony, Fujifilm,
+Olympus, Panasonic, Adobe DNG and Apple ProRAW) come from the RAW sample
+archive at <https://raw.pixls.us/>, whose samples are released under
+**Creative Commons Zero (CC0 1.0, public domain)**. They are not in this
+repository: `scripts/fetch-fixtures.mjs` downloads them, checks each against a
+SHA-256 and git-ignores them. Nothing from them ships in the app or the npm
+package.
+
+## A test photo from pillow_heif
+
+One HEIC photo the tests use (`s1.heic`, an iPhone photo of a pug) comes from
+the tests of pillow_heif, <https://github.com/bigcat88/pillow_heif>, under the
+**BSD 3-Clause** licence, copyright 2021-2023 the Pillow-Heif contributors. It is
+fetched and checked the same way, and nothing from it ships either.

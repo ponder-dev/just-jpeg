@@ -62,18 +62,28 @@ await esbuild.build({
   loader: { '.wasm': 'binary' },
 });
 
-// Static renderer assets.
-for (const file of ['index.html', 'styles.css']) {
-  await fs.copyFile(path.join(root, 'src/renderer', file), path.join(out, 'renderer', file));
-}
+// Static renderer assets: the page, and the kit it is built from (put in by
+// bin/kit-sync in the workshop; copied as it is, never rebuilt here). The
+// tool has no stylesheet of its own; the kit draws all of it.
+await fs.copyFile(path.join(root, 'src/renderer/index.html'), path.join(out, 'renderer/index.html'));
+await fs.cp(path.join(root, 'src/renderer/kit'), path.join(out, 'renderer/kit'), { recursive: true });
+
+// The tool's skill, for Copy skill on the start screen. electron-builder
+// ships app/ but not agents/, so it travels inside app/.
+await fs.mkdir(path.join(out, 'skill'), { recursive: true });
+await fs.copyFile(path.join(root, 'agents/skills/justjpeg/SKILL.md'), path.join(out, 'skill/SKILL.md'));
 
 // Credits screen, built from the real licence files rather than a copy of
 // them, so the text shown in the app is always the text we actually ship.
 const escapeHtml = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
+// The kit it is built with, said on the page (decided 2026-11-20).
+const kitVersion = JSON.parse(await fs.readFile(path.join(root, 'kit.lock'), 'utf8')).kit;
 const notices = await fs.readFile(path.join(root, 'THIRD-PARTY-NOTICES.md'), 'utf8');
 const licenseDir = path.join(root, 'licenses');
 const licenseFiles = (await fs.readdir(licenseDir)).filter((f) => f.endsWith('.txt')).sort();
+
+import { renderMarkdown } from './markdown-lite.mjs';
 
 const sections = [];
 for (const file of licenseFiles) {
@@ -91,7 +101,15 @@ await fs.writeFile(path.join(out, 'renderer/licenses.html'), `<!DOCTYPE html>
   body { margin:0; padding:28px 34px; background:#12131a; color:#eceef5;
          font:13px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
   h1 { font-size:18px; margin:0 0 4px; }
-  pre.notices { white-space:pre-wrap; font:inherit; color:#c3c8d8; }
+  .notices { color:#c3c8d8; }
+  .notices h2 { font-size:15px; margin:22px 0 6px; color:#eceef5; }
+  .notices h3 { font-size:13px; margin:16px 0 4px; color:#eceef5; }
+  .notices p { margin:6px 0; }
+  .notices ul, .notices ol { margin:6px 0; padding-left:22px; }
+  .notices li { margin:3px 0; }
+  .notices code { font:12px ui-monospace, Menlo, monospace; color:#eceef5; }
+  .notices .url { color:#9aa0b4; word-break:break-all; }
+  .notices hr { border:0; border-top:1px solid #2c2f3d; margin:18px 0; }
   details { border:1px solid #2c2f3d; border-radius:9px; margin:8px 0; background:#191b24; }
   summary { padding:9px 14px; cursor:pointer; font-weight:600; }
   details pre { margin:0; padding:0 14px 14px; max-height:340px; overflow:auto;
@@ -100,7 +118,8 @@ await fs.writeFile(path.join(out, 'renderer/licenses.html'), `<!DOCTYPE html>
 </style></head>
 <body>
   <h1>Licences and credits</h1>
-  <pre class="notices">${escapeHtml(notices)}</pre>
+  <p>Built with the PonderDev kit ${kitVersion}, the parts every Just tool shares.</p>
+  <div class="notices">${renderMarkdown(notices)}</div>
   <h2>Full licence texts</h2>
   ${sections.join('\n  ')}
 </body></html>

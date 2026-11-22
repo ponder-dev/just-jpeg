@@ -16,7 +16,7 @@ files:
   - app/**/*
   - src/**/*
   - package.json
-  # The GPL wants its terms travelling with the binary, not only in the repo.
+  # The GPL wants its terms traveling with the binary, not only in the repo.
   # Missing until 1.2.0 (tool-check 8).
   - LICENSE
   - THIRD-PARTY-NOTICES.md
@@ -27,6 +27,8 @@ files:
 # handle badly. The whole app directory is only a few MB, so there is nothing
 # to gain by packing it.
 asar: false
+
+afterPack: scripts/linux-after-pack.cjs
 
 # No update feed. This app is meant to be downloaded once and left alone, so
 # it must never phone home looking for a new version.
@@ -71,6 +73,18 @@ dmg:
 
 linux:
   icon: build/icon.png
+  # The binary is justjpeg-app so that ./justjpeg can be the launcher the tar.gz
+  # needs (scripts/linux-after-pack.cjs). The AppImage runs the binary directly.
+  executableName: justjpeg-app
+  # Names the AppImage's own .desktop file after desktopName in package.json
+  # (com.ponderdev.justjpeg.desktop), the name its icon goes by too.
+  syncDesktopName: true
+  # The window's app id on Linux is the tool's own name (the kit's window.cjs),
+  # so a dock with no menu entry still says "Just JPEG". A menu entry finds the
+  # window by this.
+  desktop:
+    entry:
+      StartupWMClass: Just JPEG
   category: Graphics
   synopsis: Convert HEIC and RAW photos to JPEG or PNG, thousands at a time
   artifactName: JustJPEG-linux-x86_64.${ext}
@@ -81,7 +95,8 @@ linux:
       arch: [x64]
 
 win:
-  icon: build/icon.png
+  # The art filling the square, every size from the vector (scripts/icons.cjs).
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: [x64]
@@ -104,3 +119,11 @@ nsis:
 
 portable:
   artifactName: JustJPEG-windows-portable.${ext}
+
+# The AppImage's static runtime (decided 2026-11-20): the older runtime needs
+# libfuse2, which a fresh Ubuntu 24.04 does not have, so the AppImage would not
+# open there. Its launcher also starts the app without Chromium's sandbox only
+# where the system forbids the user namespaces the sandbox needs (24.04's
+# AppArmor rule), instead of failing to start.
+toolsets:
+  appimage: "1.0.3"

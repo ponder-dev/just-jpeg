@@ -9,10 +9,24 @@ test/output/
 test/fixtures/s1.heic
 test/fixtures/s2.heic
 test/fixtures/sample.dng
+test/fixtures/sample.cr2
+test/fixtures/sample.nef
+test/fixtures/sample.arw
+test/fixtures/sample.raf
+test/fixtures/sample.orf
+test/fixtures/sample.rw2
 test/fixtures/sample.tiff
+test/fixtures/raw/
 
-# Intermediate iconset; build/icon.icns is the artefact that ships.
+# The vector is the single source of truth and the only icon artifact in git.
+# `npm run icon` rebuilds the png, the iconset (every size rendered from the
+# vector) and the icns from it, and the release workflow runs that per platform
+# before packaging: mac gets the icns from iconutil, linux and windows get the
+# png. Nothing here is committed that a build can produce.
+build/icon.png
+build/icon.icns
 build/icon.iconset/
+build/icon.ico
 
 # Working notes, never committed. TODO.md holds this tool's small pending fixes
 # and PLAN.md the decisions it has not made. They are for us, not documentation,
@@ -23,6 +37,7 @@ PLAN.md
 # Local notes and files that stay on this machine
 _docs/
 
-# The testing house stays on this machine, in every repo (TJ, 2026-11-13).
+# The testing house stays on this machine, in every repo (decided 2026-11-13).
 # bin/prepublish refuses a push that carries it.
 .administration/
+dist*/

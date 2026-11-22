@@ -16,7 +16,7 @@ function fourCC(b, o) {
  * 'native'  the browser (or a wasm codec) reads it directly: JPEG, PNG, GIF, BMP, WEBP
  * 'heif'    HEIC and friends
  * 'raw'     TIFF-shaped: camera RAW, or an ordinary TIFF (the caller tries both)
- * 'unknown' not an image we recognise
+ * 'unknown' not an image we recognize
  */
 export function sniff(b) {
   if (b.length < 12) return 'unknown';

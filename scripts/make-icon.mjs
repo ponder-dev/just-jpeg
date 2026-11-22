@@ -11,7 +11,7 @@
 // The third constraint is legibility: this has to survive being drawn at
 // 16 pixels, so the artwork is deliberately chunky and low on detail.
 //
-//   node scripts/make-icon.mjs && npx electron scripts/icons.cjs
+//   npm run icon (this, then scripts/icons.cjs, then scripts/make-icns.sh)
 
 import fs from 'node:fs/promises';
 import path from 'node:path';

@@ -5,139 +5,92 @@
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob: data:;" />
   <title>Just JPEG</title>
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="kit/kit.css" />
 </head>
 <body>
   <div class="titlebar"></div>
 
   <main id="app">
-    <!-- Step 1: choose files -->
-    <section id="view-drop" class="view">
-      <div id="dropzone" class="dropzone">
-        <svg class="dz-icon" viewBox="0 0 48 48" aria-hidden="true">
-          <path d="M8 34l9-11 7 8 5-6 11 13H8z" />
-          <circle cx="17" cy="16" r="4" />
-          <rect x="4" y="8" width="40" height="32" rx="4" class="dz-frame" />
-        </svg>
-        <h1>Drop your photos here</h1>
-        <p class="dz-sub">Whole folders are fine. Subfolders are included.</p>
-        <button id="btn-choose" class="btn btn-primary">Choose photos or folders</button>
-        <p class="dz-formats">HEIC, HEIF, DNG and camera RAW, plus JPEG, PNG, TIFF and WEBP</p>
-      </div>
-    </section>
+    <div class="k-utility">
+      <!-- The start screen and, once photos are in, the file row (Kit.start) -->
+      <div id="start"></div>
 
-    <!-- Step 2: settings -->
-    <section id="view-settings" class="view hidden">
-      <header class="bar">
-        <div>
-          <h2 id="file-summary">0 photos</h2>
-          <p id="file-detail" class="muted"></p>
-        </div>
-        <button id="btn-clear" class="btn btn-ghost">Start over</button>
-      </header>
-
-      <div class="settings">
-        <div class="field">
-          <label>Convert to</label>
-          <div class="segmented" id="seg-format">
-            <button data-value="jpeg" class="on">JPEG</button>
-            <button data-value="png">PNG</button>
+      <!-- Everything below comes in once photos are in -->
+      <div class="after-file">
+        <section class="k-section">
+          <div class="k-field">
+            <div class="k-label" id="label-format">Convert to</div>
+            <div id="seg-format" aria-labelledby="label-format"></div>
+            <p class="hint" id="hint-format">Best for photos. Keeps date, camera and location.</p>
           </div>
-          <p class="hint" id="hint-format">Best for photos. Keeps date, camera and location.</p>
-        </div>
 
-        <div class="field" id="field-quality">
-          <label>Quality <span id="quality-value" class="pill">85</span></label>
-          <input type="range" id="quality" min="40" max="100" value="85" />
-          <p class="hint">Higher keeps more detail and makes bigger files.</p>
-        </div>
-
-        <div class="field">
-          <label>Size</label>
-          <select id="size">
-            <option value="0">Keep original size</option>
-            <option value="4000">Large, 4000px long edge</option>
-            <option value="2000">Medium, 2000px long edge</option>
-            <option value="1200">Small, 1200px long edge</option>
-          </select>
-          <p class="hint">Shrinking makes files much smaller for email and the web.</p>
-        </div>
-
-        <div class="field">
-          <label>Save to</label>
-          <div class="row">
-            <button id="btn-output" class="btn btn-ghost">Choose folder</button>
-            <span id="output-label" class="muted">Next to each original</span>
+          <div class="k-field" id="field-quality">
+            <label for="quality">Quality <span id="quality-value" class="pill">85</span></label>
+            <input type="range" id="quality" min="40" max="100" value="85" />
+            <p class="hint">Higher keeps more detail and makes bigger files.</p>
           </div>
-        </div>
 
-        <div class="field">
-          <label>If a file already exists</label>
-          <select id="existing">
-            <option value="skip">Skip it</option>
-            <option value="rename">Keep both</option>
-            <option value="overwrite">Replace it</option>
-          </select>
-        </div>
+          <div class="k-field">
+            <label for="size">Size</label>
+            <select id="size">
+              <option value="0">Keep original size</option>
+              <option value="4000">Large, 4000px long edge</option>
+              <option value="2000">Medium, 2000px long edge</option>
+              <option value="1200">Small, 1200px long edge</option>
+            </select>
+            <p class="hint">Shrinking makes files much smaller for email and the web.</p>
+          </div>
 
-        <div class="field checks">
-          <label class="check">
-            <input type="checkbox" id="keep-metadata" checked />
-            <span>Keep photo details (date, camera, location)</span>
-          </label>
-          <label class="check">
-            <input type="checkbox" id="keep-date" checked />
-            <span>Keep the original file date</span>
-          </label>
-          <label class="check">
-            <input type="checkbox" id="max-quality" />
-            <span>Highest quality, full colour detail <span class="muted">(slower, bigger files)</span></span>
-          </label>
-        </div>
+          <div class="k-field">
+            <div class="k-label">Save to</div>
+            <div class="k-dest">
+              <button type="button" id="btn-output" class="btn btn-ghost">Choose folder</button>
+              <span id="output-label" class="k-dest-path">Next to each original</span>
+              <button type="button" id="btn-output-clear" class="linky" hidden>Back to the default</button>
+            </div>
+            <!-- Only with a folder in; kept through Kit.store. A chosen folder wins. -->
+            <div id="where-field" hidden>
+              <label class="k-check"><input type="checkbox" id="beside"> <span>Save next to the originals instead</span></label>
+              <p class="hint" id="where-hint"></p>
+            </div>
+          </div>
+
+          <div class="k-field">
+            <label for="existing">If a file already exists</label>
+            <select id="existing">
+              <option value="skip">Skip it</option>
+              <option value="rename">Keep both</option>
+              <option value="overwrite">Replace it (only files Just JPEG made)</option>
+            </select>
+          </div>
+
+          <div class="k-field">
+            <label class="k-check" id="keep-metadata-label">
+              <input type="checkbox" id="keep-metadata" checked />
+              <span>Keep photo details (date, camera, location)</span>
+            </label>
+            <label class="k-check">
+              <input type="checkbox" id="keep-date" checked />
+              <span>Keep the original file date</span>
+            </label>
+            <label class="k-check">
+              <input type="checkbox" id="max-quality" />
+              <span>Highest quality, full colour detail <span class="muted">(slower, bigger files)</span></span>
+            </label>
+          </div>
+        </section>
+
+        <!-- The estimate above the main button; what happens once it is pressed, under it (Kit.run) -->
+        <p class="k-note" id="plan-note"></p>
+        <button type="button" id="btn-convert" class="btn btn-primary btn-wide k-action">Convert</button>
+        <div id="run"></div>
       </div>
-
-      <footer class="bar">
-        <p class="muted" id="plan-note"></p>
-        <button id="btn-convert" class="btn btn-primary">Convert</button>
-      </footer>
-    </section>
-
-    <!-- Step 3: progress -->
-    <section id="view-progress" class="view hidden">
-      <h2 id="progress-title">Converting</h2>
-      <div class="progress"><div id="progress-fill" class="progress-fill"></div></div>
-      <p id="progress-count" class="big">0 of 0</p>
-      <p id="progress-file" class="muted mono"></p>
-      <p id="progress-eta" class="muted"></p>
-      <button id="btn-cancel" class="btn btn-ghost">Stop</button>
-    </section>
-
-    <!-- Step 4: done -->
-    <section id="view-done" class="view hidden">
-      <h2 id="done-title">All done</h2>
-      <p id="done-summary" class="big"></p>
-      <p id="done-saved" class="muted"></p>
-      <div id="done-errors" class="errors hidden">
-        <h3>Could not convert</h3>
-        <ul id="error-list"></ul>
-      </div>
-      <div id="done-skips" class="errors skips hidden">
-        <h3>Skipped</h3>
-        <ul id="skip-list"></ul>
-        <p class="muted">To convert these too, choose "Keep both" under "If a file already exists", or choose another folder to save to.</p>
-      </div>
-      <div class="row center">
-        <button id="btn-reveal" class="btn btn-primary">Show me</button>
-        <button id="btn-again" class="btn btn-ghost">Convert more</button>
-      </div>
-    </section>
+    </div>
   </main>
 
-  <footer class="app-footer">
-    <a href="#" id="link-ponderdev">Powered by <span class="mark">Ponder<b>Dev</b></span></a>
-    <a href="#" id="link-licenses">Licences and credits</a>
-  </footer>
+  <footer id="footer"></footer>
 
+  <script src="kit/kit.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

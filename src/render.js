@@ -4,6 +4,8 @@
 // Getting this wrong shows up as sideways photos, which is the most visible
 // bug this app could possibly ship.
 
+import { fitSize, fitScale } from './engine.js';
+
 /**
  * Draw `source` onto a new OffscreenCanvas, applying EXIF `orientation` and
  * shrinking so the long edge is at most `maxDim` (0 means leave it alone).
@@ -12,19 +14,9 @@
  * `background`, when given, fills the canvas first, for formats with no alpha.
  */
 export function render(source, srcW, srcH, orientation = 1, maxDim = 0, background = null) {
-  // Orientations 5 to 8 turn the image a quarter turn, so the output is the
-  // other way round.
-  const quarterTurn = orientation >= 5 && orientation <= 8;
-  const uprightW = quarterTurn ? srcH : srcW;
-  const uprightH = quarterTurn ? srcW : srcH;
-
-  let scale = 1;
-  if (maxDim && Math.max(uprightW, uprightH) > maxDim) {
-    scale = maxDim / Math.max(uprightW, uprightH);
-  }
-
-  const outW = Math.max(1, Math.round(uprightW * scale));
-  const outH = Math.max(1, Math.round(uprightH * scale));
+  // The size and the shrink are the engine's, the same maths the command line uses.
+  const { width: outW, height: outH } = fitSize(srcW, srcH, orientation, maxDim);
+  const scale = fitScale(srcW, srcH, orientation, maxDim);
 
   const canvas = new OffscreenCanvas(outW, outH);
   const ctx = canvas.getContext('2d');

@@ -32,7 +32,7 @@ docker run --rm --platform linux/amd64 "${MOUNT[@]}" \
   fail() { echo \"  FAIL: \$1\"; exit 1; }
 
   echo \"  justjpeg \$(justjpeg --version)\"
-  justjpeg --help | grep -q 'No camera RAW here' || fail 'the RAW caveat is missing from --help'
+  justjpeg --help | grep -q 'AVIF, GIF and BMP need the app' || fail 'the app-only caveat is missing from --help'
   echo '  --help          ok, says what it does not do'
 
   cp /fixtures/withexif.heic .
@@ -50,9 +50,10 @@ docker run --rm --platform linux/amd64 "${MOUNT[@]}" \
   echo '  pipe            ok'
 
   cp /fixtures/sample.dng .
-  justjpeg sample.dng 2>raw.log || fail 'raw refusal should not be a failing exit'
-  grep -qi raw raw.log || fail 'no raw explanation'
-  [ ! -f sample.jpg ] || fail 'raw wrote output, it must not'
-  echo '  raw             refused politely'
+  out=\$(timeout 600 justjpeg sample.dng --json) || fail \"camera RAW did not convert: \$out\"
+  echo \"\$out\" | grep -q '\"width\":3474' || fail \"camera RAW came out the wrong size: \$out\"
+  head -c3 sample.jpg | od -An -tx1 | tr -d ' \n' | grep -q ffd8ff || fail 'camera RAW gave no jpeg'
+  grep -q Exif sample.jpg || fail 'camera RAW lost its camera details'
+  echo '  raw             converted, with the app decoder, camera details kept'
 "
 echo "  linux: all good"

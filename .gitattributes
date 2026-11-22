@@ -1,0 +1,4 @@
+# Text files keep LF line endings in every checkout, Windows included:
+# kit.lock pins the kit's files by their sha256, and the tests read the
+# shipped files (the skill, the licences) as they are in git.
+* text=auto eol=lf

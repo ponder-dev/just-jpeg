@@ -80,6 +80,71 @@ export function setOrientation(tiff, value = 1) {
   return tiff;
 }
 
+const EXIF_IFD_TAG = 0x8769;
+const SIZE_TAGS_IFD0 = [0x0100, 0x0101];     // ImageWidth, ImageLength
+const SIZE_TAGS_EXIF = [0xa002, 0xa003];     // PixelXDimension, PixelYDimension
+
+/**
+ * Make the size tags in an EXIF block say the size of the picture it now
+ * sits in. The block comes from the original, so after a shrink or a quarter
+ * turn it still named the old size. Edits in place; a tag that is absent, or
+ * not a single number, is left alone.
+ */
+export function setPixelSize(tiff, width, height) {
+  try {
+    if (!tiff || tiff.length < 8) return tiff;
+    const le = u16(tiff, 0, false) === TIFF_LE;
+    const put = (ifd, tags) => {
+      if (ifd + 2 > tiff.length) return;
+      const count = u16(tiff, ifd, le);
+      for (let i = 0; i < count; i++) {
+        const entry = ifd + 2 + i * 12;
+        if (entry + 12 > tiff.length) break;
+        const tag = u16(tiff, entry, le);
+        const at = tags.indexOf(tag);
+        if (at === -1 || u32(tiff, entry + 4, le) !== 1) continue;
+        const value = at === 0 ? width : height;
+        // SHORT holds up to 65535; anything bigger is rewritten as a LONG.
+        const type = value > 0xffff ? 4 : u16(tiff, entry + 2, le);
+        if (type !== 3 && type !== 4) continue;
+        const w16 = (o, v) => { tiff[o] = le ? v & 0xff : v >> 8; tiff[o + 1] = le ? v >> 8 : v & 0xff; };
+        w16(entry + 2, type);
+        if (type === 3) { w16(entry + 8, value); w16(entry + 10, 0); }
+        else if (le) { w16(entry + 8, value & 0xffff); w16(entry + 10, value >>> 16); }
+        else { w16(entry + 8, value >>> 16); w16(entry + 10, value & 0xffff); }
+      }
+    };
+    const ifd0 = u32(tiff, 4, le);
+    put(ifd0, SIZE_TAGS_IFD0);
+    // The Exif sub-IFD hangs off IFD0.
+    if (ifd0 + 2 <= tiff.length) {
+      const count = u16(tiff, ifd0, le);
+      for (let i = 0; i < count; i++) {
+        const entry = ifd0 + 2 + i * 12;
+        if (entry + 12 > tiff.length) break;
+        if (u16(tiff, entry, le) === EXIF_IFD_TAG) put(u32(tiff, entry + 8, le), SIZE_TAGS_EXIF);
+      }
+    }
+  } catch { /* leave the block as it is */ }
+  return tiff;
+}
+
+// ------------------------------------------------------------ plain TIFFs ---
+
+/**
+ * What a plain TIFF says about itself that a viewer would act on: how it is
+ * turned (1 to 8) and its colour profile, as UTIF decoded the first page.
+ * The pixels are not turned for us, unlike a HEIC or a browser-read JPEG.
+ */
+export function tiffPageInfo(page) {
+  const first = (v) => (Array.isArray(v) || ArrayBuffer.isView(v) ? v[0] : v);
+  const o = Number(first(page && page.t274));
+  const orientation = o >= 1 && o <= 8 ? o : 1;
+  const raw = page && page.t34675;
+  const icc = raw && raw.length > 128 ? Uint8Array.from(raw) : null;
+  return { orientation, icc };
+}
+
 // ------------------------------------------------------- extract from JPEG ---
 
 /** Pull the raw TIFF block out of a JPEG's APP1 segment. */
@@ -278,7 +343,7 @@ const TAG = {
   dateTimeOriginal: 0x9003, dateTimeDigitized: 0x9004, focalLength: 0x920a, lensModel: 0xa434,
 };
 
-/** Turn a float into a TIFF rational, favouring 1/N for sub-second speeds. */
+/** Turn a float into a TIFF rational, favoring 1/N for sub-second speeds. */
 function toRational(value) {
   if (!isFinite(value) || value <= 0) return null;
   return value >= 1 ? [Math.round(value * 100), 100] : [1, Math.round(1 / value)];
@@ -392,12 +457,12 @@ export function buildExif(meta) {
 // -------------------------------------------------------- inject into JPEG ---
 
 /**
- * Pull the ICC colour profile out of a HEIF file's `colr` box.
+ * Pull the ICC color profile out of a HEIF file's `colr` box.
  *
  * This matters more than it sounds. iPhone photos are usually Display P3, and
  * the decoder hands back those P3 pixel values untouched. Writing them into a
  * JPEG with no profile makes every viewer read them as sRGB, which drains the
- * colour out of the image. Carrying the profile across keeps it accurate.
+ * color out of the image. Carrying the profile across keeps it accurate.
  */
 export function iccFromHeif(bytes) {
   try {

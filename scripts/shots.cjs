@@ -12,54 +12,52 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..');
 const outDir = path.join(root, 'shots');
-const WIDTH = 940;
+const WIDTH = 720;
 const SCALE = 2;
+
+// The run part is drawn straight from the kit for the working and done shots:
+// a fresh Kit.run on #run, with the words a real run of 3,847 photos shows.
+const RUN = `const run = Kit.run(document.getElementById('run'));
+      document.getElementById('plan-note').textContent = '';`;
+const QUEUE = `run.queue([4466, 4467, 4468, 4469, 4470, 4471, 4472, 4473].map((n) => ({
+        name: 'IMG_' + n + '.HEIC', state: n < 4470 ? 'done' : n < 4472 ? 'working' : 'waiting' })));`;
 
 // Each shot: a name, and the script that puts the UI into that state.
 const SHOTS = [
   {
     name: 'drop',
     height: 620,
-    setup: `
-      document.getElementById('view-drop').classList.remove('hidden');
-    `,
+    setup: '',
   },
   {
     // Tall enough that the whole options panel is visible without scrolling.
+    // The stand-in preload answers the choose button with a folder of photos.
     name: 'settings',
-    height: 1010,
+    height: 1110,
     setup: `
-      for (const v of ['drop','settings','progress','done'])
-        document.getElementById('view-' + v).classList.toggle('hidden', v !== 'settings');
-      document.getElementById('file-summary').textContent = '3,847 photos';
-      document.getElementById('file-detail').textContent = '11.4 GB in total';
-      document.getElementById('output-label').textContent = 'Next to each original';
-      document.getElementById('plan-note').textContent = 'Roughly 14 minutes';
+      document.getElementById('btn-choose').click();
     `,
   },
   {
     name: 'progress',
-    height: 520,
+    height: 1400,
     setup: `
-      for (const v of ['drop','settings','progress','done'])
-        document.getElementById('view-' + v).classList.toggle('hidden', v !== 'progress');
-      document.getElementById('progress-title').textContent = 'Converting to JPEG';
-      document.getElementById('progress-fill').style.width = '62%';
-      document.getElementById('progress-count').textContent = '2,385 of 3,847';
-      document.getElementById('progress-file').textContent = 'IMG_4471.HEIC';
-      document.getElementById('progress-eta').textContent = 'About 5 minutes left';
+      ${RUN}
+      document.getElementById('btn-convert').disabled = true;
+      run.working({ what: 'Converting to JPEG', count: '2,385 of 3,847', fraction: 0.62,
+        file: 'IMG_4471.HEIC', left: 'About 5 minutes left' });
+      ${QUEUE}
     `,
   },
   {
     name: 'done',
-    height: 520,
+    height: 1400,
     setup: `
-      for (const v of ['drop','settings','progress','done'])
-        document.getElementById('view-' + v).classList.toggle('hidden', v !== 'done');
-      document.getElementById('done-title').textContent = 'All done';
-      document.getElementById('done-summary').textContent = '3,847 photos converted';
-      document.getElementById('done-saved').textContent =
-        '4.9 GB of JPEG saved next to the originals, in 13 minutes.';
+      ${RUN}
+      document.getElementById('btn-convert').disabled = false;
+      run.queue([4843, 4844, 4845, 4846, 4847].map((n) => ({ name: 'IMG_' + n + '.HEIC', state: 'done' })));
+      run.done({ title: 'Done. 3,847 photos converted', detail: '4.9 GB of JPEG in 13 minutes',
+        where: 'Saved next to the originals in Beach vacation' });
     `,
   },
 ];
@@ -91,7 +89,8 @@ app.whenReady().then(async () => {
     // Offscreen rendering at 2x: the page lays out at logical size, so the
     // window is scaled up to match.
     win.setSize(WIDTH * SCALE, shot.height * SCALE);
-    await win.webContents.executeJavaScript(shot.setup);
+    // In a block of its own, so each shot's names start fresh.
+    if (shot.setup) await win.webContents.executeJavaScript(`{ ${shot.setup} }`);
     await new Promise((r) => setTimeout(r, 450));
     const image = await win.webContents.capturePage();
     const file = path.join(outDir, `${shot.name}.png`);

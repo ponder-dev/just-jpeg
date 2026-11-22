@@ -2,6 +2,8 @@
 
 import { extractExif, readOrientation } from '../src/exif.js';
 import { render } from '../src/render.js';
+import { fitSize } from '../src/engine.js';
+import { decodeRaw } from '../src/raw.js';
 
 const log = (m) => console.log(`[test] ${m}`);
 
@@ -40,6 +42,16 @@ async function testOrientations() {
       failures.push(`orientation ${orientation}: expected ${EXPECTED[orientation]}, got ${got}`);
     }
   }
+  // The canvas and the command line's raw buffers must come out the same size:
+  // both take it from the engine (tools-72), and this proves the canvas does.
+  const big = await createImageBitmap(new ImageData(new Uint8ClampedArray(300 * 200 * 4), 300, 200));
+  for (const [orientation, maxDim] of [[1, 0], [6, 0], [1, 100], [8, 90], [3, 1000], [5, 7]]) {
+    const want = fitSize(300, 200, orientation, maxDim);
+    const canvas = render(big, 300, 200, orientation, maxDim);
+    if (canvas.width !== want.width || canvas.height !== want.height) {
+      failures.push(`size at orientation ${orientation}, max ${maxDim}: canvas ${canvas.width}x${canvas.height}, engine ${want.width}x${want.height}`);
+    }
+  }
   return failures;
 }
 
@@ -73,7 +85,7 @@ function readChromaSampling(b) {
     // SOF0 (baseline) or SOF2 (progressive)
     if (marker === 0xc0 || marker === 0xc2) {
       const components = b[p + 9];
-      if (components < 3) return 'grey';
+      if (components < 3) return 'gray';
       // Component 2 is Cb: its sampling factors relative to luma.
       const cb = b[p + 10 + 3 + 1];
       return `${cb >> 4}x${cb & 0x0f}`;
@@ -101,6 +113,55 @@ function isPng(b) { return b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[
     notes: orientationFailures.length ? orientationFailures.join('; ') : 'every orientation correct',
   });
   log(`orientation maths: ${orientationFailures.length ? 'FAILED' : 'ok'}`);
+
+  // The window's RAW decode (the shared module on the copy of LibRaw the app
+  // ships) against the command line's (the same module, in node under this
+  // app's runtime): the same pixels, and the command line converts under it.
+  if (cases.some((c) => c.file === 'sample.dng')) {
+    const row = { file: 'sample.dng', format: 'cli', ok: false, notes: '' };
+    try {
+      const bytes = new Uint8Array(await window.t.fixture('sample.dng'));
+      const url = new URL('../app/renderer/vendor/libraw/index.js', import.meta.url).href;
+      const mine = await decodeRaw(bytes, { loadLibRaw: async () => (await import(url)).default });
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', mine.data))].map((b) => b.toString(16).padStart(2, '0')).join('');
+      const theirs = await window.t.nodeRaw('sample.dng');
+      const problems = [];
+      if (!theirs.hash) problems.push(`node-side decode failed: ${theirs.hashError}`);
+      else {
+        if (theirs.hash.width !== mine.width || theirs.hash.height !== mine.height) problems.push(`size ${theirs.hash.width}x${theirs.hash.height} vs window ${mine.width}x${mine.height}`);
+        if (theirs.hash.sha256 !== digest) problems.push('pixels differ between the window and the command line');
+      }
+      if (theirs.cliStatus !== 0 || theirs.cliBytes < 20000) problems.push(`command line under the app runtime: exit ${theirs.cliStatus}, ${theirs.cliBytes} bytes ${theirs.cliError}`);
+      row.ok = problems.length === 0;
+      row.dims = `${mine.width}x${mine.height}`;
+      row.notes = problems.length ? problems.join('; ') : 'same pixels as the command line; the command line converts under the app runtime';
+    } catch (err) {
+      row.notes = err.message;
+    }
+    log(`window and command line pixels: ${row.ok ? 'ok' : 'FAILED: ' + row.notes}`);
+    rows.push(row);
+  }
+
+  // A damaged camera RAW fails in the window, as on the command line: the
+  // first half of sample.dng, once with the name the app passes and once by
+  // its bytes alone. It must never come out as its small embedded preview
+  // through the TIFF reader (decided 2026-11-21).
+  if (cases.some((c) => c.file === 'sample.dng')) {
+    const whole = new Uint8Array(await window.t.fixture('sample.dng'));
+    for (const name of ['half.dng', '']) {
+      const row = { file: `sample.dng cut in half${name ? '' : ', no name'}`, format: 'jpeg', ok: false, notes: '' };
+      const bytes = whole.slice(0, Math.floor(whole.length / 2)).buffer;
+      try {
+        const result = await worker.run({ bytes, name, format: 'jpeg', quality: 85, maxDim: 0, keepMetadata: true, maxQuality: false }, [bytes]);
+        row.notes = `converted to ${result.width}x${result.height}, expected a failure`;
+      } catch (err) {
+        row.ok = /This RAW file is damaged or incomplete/.test(err.message);
+        row.notes = row.ok ? 'fails: damaged or incomplete' : `wrong failure: ${err.message}`;
+      }
+      log(`truncated DNG${name ? '' : ' (no name)'}: ${row.ok ? 'ok' : 'FAILED: ' + row.notes}`);
+      rows.push(row);
+    }
+  }
 
   for (const [i, c] of cases.entries()) {
     const row = { file: c.file, format: c.format, ok: false, notes: '' };
@@ -132,7 +193,7 @@ function isPng(b) { return b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[
       if (c.expect.h && result.height !== c.expect.h) problems.push(`height ${result.height} != ${c.expect.h}`);
 
       // Read the JPEG's SOF marker to find the real chroma sampling. Anything
-      // other than 1x1 on the colour components means detail was thrown away.
+      // other than 1x1 on the color components means detail was thrown away.
       if (c.expect.fullChroma) {
         const sampling = readChromaSampling(out);
         if (sampling !== '1x1') problems.push(`chroma is ${sampling}, expected 1x1 (4:4:4)`);
@@ -147,7 +208,7 @@ function isPng(b) { return b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[
       if (c.expect.exif) {
         const tiff = extractExif(out);
         if (!tiff) problems.push('EXIF missing from output');
-        else if (readOrientation(tiff) !== 1) problems.push('orientation not normalised');
+        else if (readOrientation(tiff) !== 1) problems.push('orientation not normalized');
       }
 
       // withexif.heic is 1200x800 stored with orientation 6, so an upright

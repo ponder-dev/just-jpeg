@@ -50,3 +50,20 @@ export function orient({ data, width, height }, orientation = 1) {
   }
   return { data: out, width: outW, height: outH };
 }
+
+/**
+ * JPEG has no alpha, and mozjpeg simply drops it, so a transparent pixel showed
+ * whatever colour happened to sit under it. Blend onto white, as the app's
+ * canvas does when it fills white first (engine.BACKGROUND). In place.
+ */
+export function flattenOnWhite(data) {
+  for (let i = 3; i < data.length; i += 4) {
+    const a = data[i];
+    if (a === 255) continue;
+    const k = 255 - a;
+    data[i - 3] = Math.round((data[i - 3] * a + 255 * k) / 255);
+    data[i - 2] = Math.round((data[i - 2] * a + 255 * k) / 255);
+    data[i - 1] = Math.round((data[i - 1] * a + 255 * k) / 255);
+    data[i] = 255;
+  }
+}
